@@ -1,0 +1,138 @@
+"use client"
+
+import { useState } from "react"
+import { toast } from "sonner"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { generateMonthlyAction } from "../actions"
+import { getMonthName } from "@/lib/utils"
+
+interface GenerateInvoicesDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onGenerated?: () => void
+}
+
+const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1)
+const currentYear = new Date().getFullYear()
+const YEARS = [currentYear - 1, currentYear, currentYear + 1]
+
+export function GenerateInvoicesDialog({
+  open,
+  onOpenChange,
+  onGenerated,
+}: GenerateInvoicesDialogProps) {
+  const [month, setMonth] = useState(new Date().getMonth() + 1)
+  const [year, setYear] = useState(currentYear)
+  const [amountOverride, setAmountOverride] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+
+  async function handleGenerate() {
+    setIsLoading(true)
+    const result = await generateMonthlyAction({
+      month,
+      year,
+      amount: amountOverride ? Number(amountOverride) : undefined,
+    })
+    setIsLoading(false)
+
+    if ("error" in result && result.error) {
+      toast.error("Terjadi kesalahan saat membuat tagihan.")
+      return
+    }
+
+    const r = result.data
+    const linksMsg =
+      r?.payment_links_created != null
+        ? ` ${r.payment_links_created} link Midtrans dibuat.`
+        : ""
+    toast.success(
+      `${r?.generated} tagihan dibuat. ${r?.skipped_on_leave} cuti, ${r?.skipped_existing} sudah ada.${linksMsg}`
+    )
+    onOpenChange(false)
+    onGenerated?.()
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Buat Tagihan Bulanan</DialogTitle>
+          <DialogDescription>
+            Tagihan akan dibuat untuk semua siswa aktif yang tidak sedang cuti.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Bulan</Label>
+              <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MONTHS.map((m) => (
+                    <SelectItem key={m} value={String(m)}>
+                      {getMonthName(m)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Tahun</Label>
+              <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {YEARS.map((y) => (
+                    <SelectItem key={y} value={String(y)}>
+                      {y}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Jumlah SPP (opsional)</Label>
+            <Input
+              type="number"
+              placeholder="Kosongkan untuk pakai pengaturan default"
+              value={amountOverride}
+              onChange={(e) => setAmountOverride(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>
+            Batal
+          </Button>
+          <Button onClick={handleGenerate} disabled={isLoading}>
+            {isLoading ? "Membuat..." : "Buat Tagihan"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

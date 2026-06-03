@@ -1,0 +1,2 @@
+export const DEFAULT_MONTHLY_FEE = 500_000 // IDR
+export const DEFAULT_REMINDER_DAYS = [1, 11, 21]

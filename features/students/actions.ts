@@ -1,0 +1,55 @@
+"use server"
+
+import { revalidatePath } from "next/cache"
+import { studentService } from "./service"
+import { createStudentSchema, updateStudentSchema, setLeaveSchema } from "./validations"
+import type { CreateStudentInput, UpdateStudentInput } from "./types"
+
+export async function createStudentAction(input: CreateStudentInput) {
+  const parsed = createStudentSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const student = await studentService.create(parsed.data as CreateStudentInput)
+  revalidatePath("/students")
+  return { data: student }
+}
+
+export async function updateStudentAction(id: string, input: UpdateStudentInput) {
+  const parsed = updateStudentSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const student = await studentService.update(id, parsed.data)
+  revalidatePath("/students")
+  revalidatePath(`/students/${id}`)
+  return { data: student }
+}
+
+export async function deactivateStudentAction(id: string) {
+  await studentService.deactivate(id)
+  revalidatePath("/students")
+  revalidatePath(`/students/${id}`)
+  return { data: true }
+}
+
+export async function setLeaveAction(
+  studentId: string,
+  month: number,
+  year: number,
+  reason?: string
+) {
+  const parsed = setLeaveSchema.safeParse({ month, year, reason })
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const leave = await studentService.setLeave(studentId, month, year, reason)
+  revalidatePath(`/students/${studentId}`)
+  return { data: leave }
+}
+
+export async function cancelLeaveAction(leaveId: string, studentId: string) {
+  await studentService.cancelLeave(leaveId)
+  revalidatePath(`/students/${studentId}`)
+  return { data: true }
+}
