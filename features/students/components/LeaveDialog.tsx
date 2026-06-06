@@ -125,7 +125,7 @@ export function LeaveDialog({ studentId, open, onOpenChange }: LeaveDialogProps)
           </div>
 
           {existingInvoice && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 space-y-1">
+            <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-muted)] px-3 py-2.5 text-xs text-[var(--warning-foreground)] space-y-1">
               <p className="font-medium">
                 Tagihan {getMonthName(month)} {year} ({formatRupiah(existingInvoice.amount)}) masih belum lunas.
               </p>
@@ -133,7 +133,7 @@ export function LeaveDialog({ studentId, open, onOpenChange }: LeaveDialogProps)
                 Setelah cuti dicatat, bebaskan atau batalkan tagihan secara manual.{" "}
                 <Link
                   href={`/payments/${existingInvoice.id}`}
-                  className="underline hover:text-amber-900"
+                  className="underline hover:opacity-80"
                   onClick={() => onOpenChange(false)}
                 >
                   Lihat tagihan

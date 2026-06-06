@@ -34,15 +34,20 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="text-xl">Kumon Admin</CardTitle>
-          <CardDescription>Masuk ke panel manajemen</CardDescription>
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-background to-[#EDE8DC] p-4">
+      <Card className="w-full max-w-md border-border shadow-card">
+        <CardHeader className="space-y-3 text-center">
+          <CardTitle className="font-heading text-2xl font-medium tracking-tight">
+            Kumon Admin
+          </CardTitle>
+          <div className="mx-auto h-px w-12 bg-[var(--highlight)]" />
+          <CardDescription className="text-base">
+            Masuk ke panel manajemen
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1.5">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
@@ -54,7 +59,7 @@ export default function LoginPage() {
                 disabled={isLoading}
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
@@ -67,9 +72,11 @@ export default function LoginPage() {
               />
             </div>
             {error && (
-              <p className="text-sm text-destructive">{error}</p>
+              <p className="rounded-lg border border-[var(--danger-border)] bg-[var(--danger-muted)] px-3 py-2 text-sm text-[var(--danger)]">
+                {error}
+              </p>
             )}
-            <Button type="submit" className="w-full" disabled={isLoading}>
+            <Button type="submit" className="h-10 w-full" disabled={isLoading}>
               {isLoading ? "Masuk..." : "Masuk"}
             </Button>
           </form>

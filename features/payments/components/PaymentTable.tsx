@@ -37,7 +37,7 @@ const columns: Column<InvoiceWithStudent>[] = [
     header: "Link Midtrans",
     cell: (row) =>
       row.midtrans_payment_url ? (
-        <span className="text-xs text-green-700 font-medium">Ada</span>
+        <span className="text-xs font-medium text-[var(--success)]">Ada</span>
       ) : (
         <span className="text-xs text-muted-foreground">Belum</span>
       ),

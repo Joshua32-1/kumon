@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server"
 import { z } from "zod"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { persistFeeScheduleOnSettingsSave } from "@/lib/billing/load-subject-fees"
 import { apiSuccess, apiError } from "@/lib/utils"
 
 const updateSchema = z.object({
@@ -37,6 +38,13 @@ export async function PATCH(request: NextRequest) {
         .from("system_config")
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .upsert({ key, value, updated_at: new Date().toISOString() } as any)
+
+      if (key === "subject_fees") {
+        await persistFeeScheduleOnSettingsSave(
+          supabase,
+          value as Record<string, unknown>
+        )
+      }
     }
 
     return apiSuccess({ updated: parsed.data.updates.length })

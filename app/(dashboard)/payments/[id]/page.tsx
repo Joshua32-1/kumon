@@ -18,18 +18,26 @@ export default function PaymentDetailPage({ params }: PageProps) {
   const { data: invoice, isLoading, mutate } = useSWR(`/api/payments/${id}`, fetcher)
 
   if (isLoading) {
-    return <div className="text-muted-foreground py-12 text-center text-sm">Memuat...</div>
+    return (
+      <div className="py-16 text-center font-heading text-base text-muted-foreground">
+        Memuat...
+      </div>
+    )
   }
 
   if (!invoice) {
-    return <div className="text-muted-foreground py-12 text-center text-sm">Tagihan tidak ditemukan.</div>
+    return (
+      <div className="py-16 text-center font-heading text-base text-muted-foreground">
+        Tagihan tidak ditemukan.
+      </div>
+    )
   }
 
   return (
     <>
       <div className="flex items-center gap-2">
         <Link href="/payments">
-          <Button variant="ghost" size="sm">← Kembali</Button>
+          <Button variant="outline" size="sm">← Kembali</Button>
         </Link>
       </div>
       <PageHeader

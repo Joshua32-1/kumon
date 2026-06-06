@@ -170,17 +170,17 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
         <CardContent className="space-y-4">
           {/* Attention banner */}
           {attentionMessage && (
-            <div className={`rounded-md border px-3 py-2 text-sm ${
+            <div className={`rounded-lg border px-3 py-2 text-sm ${
               attentionMessage.variant === "red"
-                ? "border-red-200 bg-red-50 text-red-800"
-                : "border-orange-200 bg-orange-50 text-orange-800"
+                ? "border-[var(--danger-border)] bg-[var(--danger-muted)] text-[var(--danger-foreground)]"
+                : "border-[var(--warning-border)] bg-[var(--warning-muted)] text-[var(--warning-foreground)]"
             }`}>
               {attentionMessage.text}
             </div>
           )}
 
           {isPaidOldLink && (
-            <div className="rounded-md border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-900">
+            <div className="rounded-lg border border-[var(--highlight-border)] bg-[var(--highlight-muted)] px-3 py-2 text-sm text-[var(--highlight-foreground)]">
               <p className="font-medium">Pembayaran via link lama</p>
               <p className="mt-1">
                 Orang tua membayar link yang sudah tidak berlaku (tagihan dibatalkan/dibebaskan
@@ -188,7 +188,7 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
                 alokasi ke tagihan aktif.
               </p>
               {invoice.midtrans_transaction_id && (
-                <p className="mt-1 text-xs text-purple-700">
+                <p className="mt-1 text-xs text-[var(--highlight)]">
                   ID transaksi: {invoice.midtrans_transaction_id}
                 </p>
               )}
@@ -197,16 +197,16 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
 
           {/* Line items breakdown */}
           {lineItems.length > 0 && (
-            <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1">
+            <div className="space-y-1 rounded-lg border border-border bg-muted/30 px-4 py-3">
               {lineItems.map((item) => (
                 <div key={item.subject} className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">{item.label}</span>
                   <span className="font-medium">{formatRupiah(item.unit_amount)}</span>
                 </div>
               ))}
-              <div className="flex items-center justify-between border-t pt-1 text-sm font-semibold">
+              <div className="flex items-center justify-between border-t border-border pt-2 text-sm font-semibold">
                 <span>Total</span>
-                <span>{formatRupiah(invoice.amount)}</span>
+                <span className="font-heading text-[var(--highlight)]">{formatRupiah(invoice.amount)}</span>
               </div>
             </div>
           )}
@@ -286,7 +286,7 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
                     </div>
 
                     {r.status === "FAILED" && r.message_preview && (
-                      <p className="text-xs text-red-600 truncate" title={r.message_preview}>
+                      <p className="truncate text-xs text-[var(--danger)]" title={r.message_preview}>
                         {r.message_preview}
                       </p>
                     )}

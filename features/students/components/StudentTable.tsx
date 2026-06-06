@@ -5,7 +5,7 @@ import { DataTable, type Column } from "@/components/shared/DataTable"
 import { StudentStatusBadge } from "./StudentStatusBadge"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { PaymentStatusBadge } from "@/features/payments/components/PaymentStatusBadge"
-import { formatDate } from "@/lib/utils"
+import { formatMonthYear } from "@/lib/utils"
 import { SCHOOL_LEVEL_LABELS } from "@/lib/billing/fees"
 import { GRADE_LABELS } from "@/lib/billing/grades"
 import type { StudentGrade } from "@/lib/billing/grades"
@@ -64,7 +64,7 @@ function makeColumns(
     {
       key: "enrolled_at",
       header: "Terdaftar",
-      cell: (row) => formatDate(row.enrolled_at),
+      cell: (row) => formatMonthYear(row.enrolled_at),
     },
   ]
 

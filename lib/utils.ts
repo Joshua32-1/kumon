@@ -48,6 +48,11 @@ export function formatDate(dateStr: string): string {
   })
 }
 
+export function formatMonthYear(dateStr: string): string {
+  const { month, year } = monthYearFromDateString(dateStr)
+  return `${getMonthName(month)} ${year}`
+}
+
 // ── Timezone helpers (center operates in WIB) ──────────────────────────────
 
 const CENTER_TIMEZONE = "Asia/Jakarta"

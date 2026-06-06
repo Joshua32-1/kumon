@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { ALL_SUBJECTS } from "@/lib/billing/fees"
 import { ALL_GRADES } from "@/lib/billing/grades"
+import { monthYearFromDateString, toDateString } from "@/lib/utils"
 
 export const phoneRegex = /^\+62\d{8,13}$/
 
@@ -21,7 +22,13 @@ export const createStudentSchema = z.object({
     .array(z.enum(["ENGLISH", "INDONESIAN", "MATHEMATICS"]))
     .min(1, "Pilih minimal 1 mata pelajaran")
     .refine((arr) => arr.every((s) => ALL_SUBJECTS.includes(s)), "Mata pelajaran tidak valid"),
-  enrolled_at: z.string().optional(),
+  enrolled_at: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Format bulan/tahun tidak valid")
+    .transform((s) => {
+      const { month, year } = monthYearFromDateString(s)
+      return toDateString(year, month, 1)
+    }),
   notes: z.string().optional(),
   contact: contactSchema,
 })

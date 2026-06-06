@@ -34,14 +34,14 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   if (isLoading) {
     return (
-      <div className="flex h-48 items-center justify-center">
+      <div className="flex h-48 items-center justify-center rounded-xl border border-border bg-card shadow-card">
         <LoadingSpinner />
       </div>
     )
   }
 
   return (
-    <div className="rounded-lg border">
+    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-card">
       <Table>
         <TableHeader>
           <TableRow>
@@ -57,7 +57,7 @@ export function DataTable<T>({
             <TableRow>
               <TableCell
                 colSpan={columns.length}
-                className="text-muted-foreground h-24 text-center"
+                className="h-28 text-center font-heading text-base text-muted-foreground"
               >
                 {emptyMessage}
               </TableCell>
@@ -67,7 +67,7 @@ export function DataTable<T>({
               <TableRow
                 key={i}
                 onClick={() => onRowClick?.(row)}
-                className={onRowClick ? "cursor-pointer hover:bg-muted/50" : undefined}
+                className={onRowClick ? "cursor-pointer" : undefined}
               >
                 {columns.map((col) => (
                   <TableCell key={col.key} className={col.className}>

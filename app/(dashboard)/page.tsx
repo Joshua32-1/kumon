@@ -2,7 +2,9 @@ import Link from "next/link"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { studentService } from "@/features/students/service"
 import { PageHeader } from "@/components/shared/PageHeader"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { KpiCard } from "@/components/shared/KpiCard"
+import { AlertPanel } from "@/components/shared/AlertPanel"
+import { RevenueChart } from "@/components/dashboard/RevenueChart"
 import { leaveReviewSummary } from "@/lib/billing/leave-review-label"
 import { summarizeArrears } from "@/lib/billing/arrears"
 import { getBillingSummary } from "@/features/payments/billing-summary"
@@ -56,20 +58,17 @@ async function getDashboardStats() {
     0
   )
 
-  // Use getBillingSummary for consistent needs-action logic (same as Pembayaran page)
   let needsActionCount = 0
   for (const inv of allUnpaidRows ?? []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const invAny = inv as any
     const reminders: PaymentReminder[] = invAny.payment_reminders ?? []
-    // Only count current-month for "perlu tindakan" card
     if (invAny.month === month && invAny.year === year) {
       const summary = getBillingSummary(invAny as Invoice, reminders, today)
       if (summary.attention === "needs_action") needsActionCount++
     }
   }
 
-  // Arrears: all unpaid across months
   const allInvoices = (allUnpaidRows ?? []) as unknown as Invoice[]
   const arrears = summarizeArrears(allInvoices, today)
 
@@ -92,7 +91,7 @@ export default async function DashboardPage() {
     studentService.listLeaveReviewAlerts(),
   ])
 
-  const cards = [
+  const operationalCards = [
     {
       title: "Siswa Aktif",
       value: stats.activeStudents,
@@ -121,6 +120,9 @@ export default async function DashboardPage() {
       highlight: false,
       href: "/students?status=TEMPORARY_LEAVE",
     },
+  ]
+
+  const attentionCards = [
     {
       title: "Cuti Perlu Review",
       value: leaveReview.students.length,
@@ -161,104 +163,72 @@ export default async function DashboardPage() {
       />
 
       {leaveReview.students.length > 0 && (
-        <Card className="border-amber-300 bg-amber-50/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base text-amber-950">
-              Siswa cuti {leaveReview.max_consecutive_months}+ bulan berturut-turut
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p className="text-muted-foreground text-sm">
+        <AlertPanel
+          variant="warning"
+          title={`Siswa cuti ${leaveReview.max_consecutive_months}+ bulan berturut-turut`}
+          description={
+            <>
               Batas di Pengaturan adalah bulan cuti <strong>berurutan</strong>, bukan total.
               Review apakah siswa perlu dinonaktifkan.
-            </p>
-            <ul className="divide-y divide-amber-200/80 rounded-md border border-amber-200 bg-white">
-              {leaveReview.students.map((s) => (
-                <li key={s.id}>
-                  <Link
-                    href={`/students/${s.id}`}
-                    className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-sm hover:bg-amber-50"
-                  >
-                    <span className="font-medium text-amber-950">{s.full_name}</span>
-                    <span className="text-amber-800 text-xs">
-                      {leaveReviewSummary(s)}
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+            </>
+          }
+          items={leaveReview.students.map((s) => ({
+            key: s.id,
+            href: `/students/${s.id}`,
+            primary: s.full_name,
+            secondary: leaveReviewSummary(s),
+          }))}
+        />
       )}
 
-      {/* Tunggakan breakdown panel */}
       {stats.arrears.byPeriod.length > 0 && (
-        <Card className="border-red-200 bg-red-50/40">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base text-red-900">
-              Tunggakan {stats.arrears.count} tagihan — {formatRupiah(stats.arrears.totalAmount)}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-red-700 mb-3">
-              Tagihan melewati jatuh tempo dan belum lunas. Cron mengirim pengingat pada tanggal 1, 11, 21.
-            </p>
-            <ul className="divide-y divide-red-200/80 rounded-md border border-red-200 bg-white">
-              {stats.arrears.byPeriod.slice(0, 5).map((p) => (
-                <li key={`${p.year}-${p.month}`}>
-                  <Link
-                    href={`/payments?view=arrears&month=${p.month}&year=${p.year}`}
-                    className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-sm hover:bg-red-50"
-                  >
-                    <span className="font-medium text-red-900">
-                      {getMonthName(p.month)} {p.year}
-                    </span>
-                    <span className="text-red-700 text-xs">
-                      {p.count} siswa · {formatRupiah(p.totalAmount)}
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-            {stats.arrears.byPeriod.length > 5 && (
-              <p className="text-xs text-red-600 mt-2">
+        <AlertPanel
+          variant="danger"
+          title={`Tunggakan ${stats.arrears.count} tagihan — ${formatRupiah(stats.arrears.totalAmount)}`}
+          description="Tagihan melewati jatuh tempo dan belum lunas. Cron mengirim pengingat pada tanggal 1, 11, 21."
+          items={stats.arrears.byPeriod.slice(0, 5).map((p) => ({
+            key: `${p.year}-${p.month}`,
+            href: `/payments?view=arrears&month=${p.month}&year=${p.year}`,
+            primary: `${getMonthName(p.month)} ${p.year}`,
+            secondary: `${p.count} siswa · ${formatRupiah(p.totalAmount)}`,
+          }))}
+          footer={
+            stats.arrears.byPeriod.length > 5 ? (
+              <p className="text-xs text-[var(--danger)]">
                 +{stats.arrears.byPeriod.length - 5} bulan lainnya —{" "}
                 <Link href="/payments?view=arrears" className="underline">
                   lihat semua
                 </Link>
               </p>
-            )}
-          </CardContent>
-        </Card>
+            ) : undefined
+          }
+        />
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {cards.map((card) => {
-          const inner = (
-            <Card
-              key={card.title}
-              className={card.highlight ? "border-orange-300" : undefined}
-            >
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  {card.title}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">{card.value}</p>
-                <p className="text-muted-foreground mt-1 text-xs">{card.description}</p>
-              </CardContent>
-            </Card>
-          )
+      <div className="space-y-6">
+        <RevenueChart />
 
-          return card.href ? (
-            <Link key={card.title} href={card.href} className="block">
-              {inner}
-            </Link>
-          ) : (
-            <div key={card.title}>{inner}</div>
-          )
-        })}
+        <div>
+          <h2 className="mb-4 font-heading text-sm font-medium tracking-wide text-muted-foreground uppercase">
+            Operasional
+          </h2>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {operationalCards.map((card) => (
+              <KpiCard key={card.title} {...card} />
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h2 className="mb-4 font-heading text-sm font-medium tracking-wide text-muted-foreground uppercase">
+            Perlu Perhatian
+          </h2>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {attentionCards.map((card) => (
+              <KpiCard key={card.title} {...card} />
+            ))}
+          </div>
+        </div>
       </div>
     </>
   )

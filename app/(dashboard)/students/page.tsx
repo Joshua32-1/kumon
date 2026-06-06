@@ -5,6 +5,9 @@ import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { PageHeader } from "@/components/shared/PageHeader"
+import { FilterPill } from "@/components/shared/FilterPill"
+import { PeriodSelector } from "@/components/shared/PeriodSelector"
+import { AlertBanner } from "@/components/shared/AlertPanel"
 import { StudentTable } from "@/features/students/components/StudentTable"
 import type { StudentBillingEntry } from "@/features/students/components/StudentTable"
 import { Button } from "@/components/ui/button"
@@ -63,7 +66,6 @@ export default function StudentsPage() {
     (leaveReviewData?.students ?? []).map((s) => [s.id, s])
   )
 
-  // Build billing map — includes all students that have invoice or leave records
   const billingMap = new Map<string, StudentBillingEntry>()
   if (billingData?.billing) {
     for (const [studentId, entry] of Object.entries(billingData.billing)) {
@@ -95,60 +97,40 @@ export default function StudentsPage() {
         }
       />
 
-      {/* Filter bar + billing month selector */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-4 shadow-card">
         {STATUS_FILTERS.map((f) => (
-          <button
+          <FilterPill
             key={f.value}
+            label={f.label}
+            active={(statusParam ?? "") === f.value}
             onClick={() => router.push(f.value ? `/students?status=${f.value}` : "/students")}
-            className={`rounded-md border px-3 py-1 text-sm transition-colors ${
-              (statusParam ?? "") === f.value
-                ? "bg-primary text-primary-foreground border-primary"
-                : "border-border hover:bg-muted"
-            }`}
-          >
-            {f.label}
-          </button>
+          />
         ))}
 
-        <button
+        <FilterPill
+          label={`Perlu tindakan${attentionCount > 0 ? ` (${attentionCount})` : ""}`}
+          active={attentionOnly}
+          variant="attention"
           onClick={() => setAttentionOnly((v) => !v)}
-          className={`rounded-md border px-3 py-1 text-sm transition-colors ${
-            attentionOnly
-              ? "bg-red-600 text-white border-red-600"
-              : "border-border hover:bg-muted"
-          }`}
-        >
-          Perlu tindakan{attentionCount > 0 ? ` (${attentionCount})` : ""}
-        </button>
+        />
 
-        <span className="text-muted-foreground text-xs ml-2">Tagihan:</span>
-        <select
-          value={billingMonth}
-          onChange={(e) => setBillingMonth(Number(e.target.value))}
-          className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-        >
-          {MONTHS.map((m) => (
-            <option key={m} value={m}>{MONTH_NAMES[m - 1]}</option>
-          ))}
-        </select>
-        <select
-          value={billingYear}
-          onChange={(e) => setBillingYear(Number(e.target.value))}
-          className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-        >
-          {YEARS.map((y) => (
-            <option key={y} value={y}>{y}</option>
-          ))}
-        </select>
+        <PeriodSelector
+          month={billingMonth}
+          year={billingYear}
+          onMonthChange={setBillingMonth}
+          onYearChange={setBillingYear}
+          monthNames={MONTH_NAMES}
+          months={MONTHS}
+          years={YEARS}
+        />
       </div>
 
       {leaveReviewData && leaveReviewData.students.length > 0 && (
-        <p className="text-amber-800 text-sm rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+        <AlertBanner variant="warning">
           {leaveReviewData.students.length} siswa cuti{" "}
           {leaveReviewData.max_consecutive_months}+ bulan <strong>berturut-turut</strong> — lihat
           badge &quot;Cuti N+ bln&quot; di tabel atau buka profil untuk menonaktifkan.
-        </p>
+        </AlertBanner>
       )}
 
       <StudentTable

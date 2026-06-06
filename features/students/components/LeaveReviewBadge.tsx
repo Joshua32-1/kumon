@@ -19,7 +19,7 @@ export function LeaveReviewBadge({ alert, className }: LeaveReviewBadgeProps) {
   return (
     <Badge
       variant="outline"
-      className={`border-amber-400 bg-amber-50 text-amber-900 ${className ?? ""}`}
+      className={`border-[var(--warning-border)] bg-[var(--warning-muted)] text-[var(--warning-foreground)] ${className ?? ""}`}
       title={leaveReviewSummary(alert)}
     >
       Cuti {alert.consecutive_months}+ bln

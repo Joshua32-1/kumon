@@ -74,7 +74,8 @@ Invoice generation and WhatsApp reminders run via cron API routes, scheduled by 
 | Schedule (WIB) | Endpoint | What it does |
 |---|---|---|
 | 1 Jul, 00:00 | `GET /api/cron/promote-grades` | Promotes grade for all **ACTIVE** and **TEMPORARY_LEAVE** students (TK 1→TK 2→…→SD 6→SMP 1→…→SMA 3; SMA 3 unchanged). Updates billing tier (TK/SD vs SMP/SMA) from grade. Skips **INACTIVE** only. **Idempotent per year** — a second run for the same promotion year is a no-op (`already_promoted: true`). Only allowed in July (WIB) unless overridden for testing. |
-| 1st, 07:00 | `GET /api/cron/generate-invoices` | Marks all older unpaid (`PENDING`) invoices as `OVERDUE`, then creates one invoice per **ACTIVE** or **TEMPORARY_LEAVE** student for the current month (skips students with a `temporary_leaves` row for that month, with an existing non-cancelled invoice, or with no subjects enrolled). Amount = sum of per-subject fees for that student's school level. Creates Midtrans payment links. Schedules reminders for the 1st, 11th, and 21st. |
+| 1st, 07:00 | `GET /api/cron/generate-invoices` | Marks all older unpaid (`PENDING`) invoices as `OVERDUE`, then creates one invoice per **ACTIVE** or **TEMPORARY_LEAVE** student for the current month (skips students with a `temporary_leaves` row for that month, with an existing non-cancelled invoice, or with no subjects enrolled). Amount = sum of per-subject fees for that student's school level. Creates Midtrans payment links (500ms delay between calls, exponential backoff on 429/5xx). Schedules reminders for the 1st, 11th, and 21st. |
+| Daily, 07:30 | `GET /api/cron/backfill-payment-links` | Retries Midtrans link creation for up to 50 unpaid (`PENDING`/`OVERDUE`) invoices missing a payment URL (oldest first). Catches rate-limit failures from invoice generation before morning reminders. |
 | 1st, 11th, 21st — 09:00 WIB (slot 1) | `GET /api/cron/send-reminders` | **Slot 1** of 4. Sends up to 100 current-month scheduled reminders (Phase 1). 2s delay between sends. |
 | 1st, 11th, 21st — 09:30 WIB (slot 2) | `GET /api/cron/send-reminders` | **Slot 2**. Continues Phase 1 remainder (up to 100). |
 | 1st, 11th, 21st — 10:00 WIB (slot 3) | `GET /api/cron/send-reminders` | **Slot 3**. Phase 1 remainder + starts **Phase 2** (OVERDUE/prior-month chase). Up to 100 each. |
@@ -115,6 +116,10 @@ curl http://localhost:3000/api/cron/promote-grades \
 # Reconcile unpaid invoices against Midtrans
 curl http://localhost:3000/api/cron/reconcile-payments \
   -H "Authorization: Bearer YOUR_CRON_SECRET"
+
+# Backfill missing Midtrans payment links
+curl http://localhost:3000/api/cron/backfill-payment-links \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"
 ```
 
 **Manual overrides** (POST + `x-api-key` — JSON body for parameters):
@@ -147,7 +152,26 @@ curl -X POST http://localhost:3000/api/cron/promote-grades \
 # Reconcile unpaid invoices against Midtrans
 curl -X POST http://localhost:3000/api/cron/reconcile-payments \
   -H "x-api-key: YOUR_WEBHOOK_SECRET"
+
+# Backfill missing payment links for a specific month
+curl -X POST http://localhost:3000/api/cron/backfill-payment-links \
+  -H "x-api-key: YOUR_WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"month": 6, "year": 2026, "batch_limit": 100}'
 ```
+
+### Midtrans link rate limiting
+
+Bulk invoice generation creates Snap payment links sequentially. To avoid Midtrans throttling:
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `MIDTRANS_LINK_DELAY_MS` | `500` | Milliseconds between link-creation calls |
+| `MIDTRANS_RETRY_ATTEMPTS` | `4` | Max attempts per Snap call (exponential backoff) |
+| `MIDTRANS_RETRY_BASE_DELAY_MS` | `2000` | Base delay before first retry on 429/5xx |
+| `MIDTRANS_BACKFILL_BATCH_LIMIT` | `50` | Invoices processed per backfill cron run |
+
+If some links still fail, the daily backfill cron retries them before morning WhatsApp reminders. Reminder sends also call `ensureCheckoutLink` as a last resort.
 
 ### WhatsApp send rate limiting
 

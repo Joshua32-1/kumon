@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { formatDate, getMonthName, formatRupiah, currentMonthYearInCenterTimezone, todayInCenterTimezone } from "@/lib/utils"
+import { formatMonthYear, getMonthName, formatRupiah, currentMonthYearInCenterTimezone, todayInCenterTimezone } from "@/lib/utils"
 import { summarizeArrears } from "@/lib/billing/arrears"
 import { ALL_SUBJECTS, SUBJECT_LABELS, SCHOOL_LEVEL_LABELS } from "@/lib/billing/fees"
 import type { KumonSubject, SchoolLevel } from "@/lib/billing/fees"
@@ -262,7 +262,7 @@ export default function StudentDetailPage({ params }: PageProps) {
     <>
       <PageHeader
         title={student.full_name}
-        description={`Kelas: ${GRADE_LABELS[student.grade as StudentGrade] ?? student.grade} · Terdaftar: ${formatDate(student.enrolled_at)}`}
+        description={`Kelas: ${GRADE_LABELS[student.grade as StudentGrade] ?? student.grade} · Terdaftar: ${formatMonthYear(student.enrolled_at)}`}
         action={
           <div className="flex flex-wrap gap-2">
             {student.status !== "INACTIVE" && (
@@ -292,9 +292,9 @@ export default function StudentDetailPage({ params }: PageProps) {
       </div>
 
       {student.leave_review && (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-muted)] px-4 py-3 text-sm text-[var(--warning-foreground)]">
           <p className="font-medium">Cuti berturut-turut mencapai batas</p>
-          <p className="mt-1 text-amber-900/90">
+          <p className="mt-1 opacity-90">
             {leaveReviewSummary(student.leave_review)}. Batas pengaturan:{" "}
             {student.leave_review.max_consecutive_months} bulan berurutan (bukan total).
             Pertimbangkan menonaktifkan siswa jika tidak akan kembali.
@@ -312,7 +312,7 @@ export default function StudentDetailPage({ params }: PageProps) {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-6 md:grid-cols-2">
         {/* Profile */}
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-4">
@@ -530,11 +530,11 @@ export default function StudentDetailPage({ params }: PageProps) {
         </Card>
 
         {/* Leaves */}
-        <Card className={student.leave_review ? "border-amber-300" : undefined}>
+        <Card className={student.leave_review ? "border-[var(--warning-border)]" : undefined}>
           <CardHeader>
             <CardTitle className="text-base">Riwayat Cuti</CardTitle>
             {student.leave_review && (
-              <p className="text-amber-800 text-xs font-normal mt-1">
+              <p className="mt-1 text-xs font-normal text-[var(--warning)]">
                 {leaveReviewSummary(student.leave_review)}
               </p>
             )}
@@ -569,12 +569,12 @@ export default function StudentDetailPage({ params }: PageProps) {
 
       {/* Tunggakan strip — shown when student has overdue/past-due invoices */}
       {arrears.count > 0 && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-            <p className="text-sm font-medium text-red-900">
+        <div className="rounded-lg border border-[var(--danger-border)] bg-[var(--danger-muted)] px-4 py-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium text-[var(--danger-foreground)]">
               {arrears.count} tunggakan · {formatRupiah(arrears.totalAmount)}
             </p>
-            <Link href={`/payments?view=arrears&student_id=${id}`} className="text-xs text-red-700 underline">
+            <Link href={`/payments?view=arrears&student_id=${id}`} className="text-xs text-[var(--danger)] underline">
               Lihat semua
             </Link>
           </div>
@@ -583,7 +583,7 @@ export default function StudentDetailPage({ params }: PageProps) {
               <Link
                 key={`${p.year}-${p.month}`}
                 href={`/payments/${p.invoiceIds[0]}`}
-                className="rounded border border-red-200 bg-white px-2 py-1 text-xs text-red-800 hover:bg-red-100"
+                className="rounded-lg border border-[var(--danger-border)] bg-card px-2.5 py-1 text-xs text-[var(--danger-foreground)] transition-colors duration-200 hover:bg-[var(--danger-muted)]"
               >
                 {getMonthName(p.month)} {p.year} — {formatRupiah(p.totalAmount)}
               </Link>
@@ -646,12 +646,12 @@ export default function StudentDetailPage({ params }: PageProps) {
               </div>
 
               {billingSummary.attentionReason === "delivery" && (
-                <div className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-800">
+                <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-muted)] px-3 py-2 text-xs text-[var(--warning-foreground)]">
                   Tagihan ini memerlukan tindakan — link belum dikirim atau pengiriman gagal.
                 </div>
               )}
               {billingSummary.attentionReason === "collection" && (
-                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                <div className="rounded-lg border border-[var(--danger-border)] bg-[var(--danger-muted)] px-3 py-2 text-xs text-[var(--danger-foreground)]">
                   Tagihan sudah melewati jatuh tempo dan belum lunas. Tindak lanjuti jika perlu.
                 </div>
               )}

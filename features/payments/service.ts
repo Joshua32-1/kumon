@@ -17,27 +17,44 @@ import {
   todayInCenterTimezone,
   dayOfMonthFromDateString,
   monthYearFromDateString,
+  currentMonthYearInCenterTimezone,
   isPriorBillingPeriod,
 } from "@/lib/utils"
 import {
-  parseSubjectFees,
   computeInvoiceLineItems,
 } from "@/lib/billing/fees"
 import type { KumonSubject, SchoolLevel } from "@/lib/billing/fees"
+import {
+  isBillingPeriodBeforeEnrollment,
+  isPastBillingPeriod,
+  filterSubjectsForBillingPeriod,
+} from "@/lib/billing/billing-period"
+import { loadSubjectFeesForPeriod } from "@/lib/billing/load-subject-fees"
 import type { Contact } from "@/features/students/types"
 import type {
   Invoice,
   InvoiceWithStudent,
   PaymentFilters,
   PaymentReminder,
+  PaymentStatus,
   GenerateMonthlyInput,
   GenerateResult,
+  CheckoutLinksResult,
+  BackfillLinksResult,
+  GenerateCandidate,
+  GenerateInvoiceCategory,
+  GenerateCandidatesResult,
+  GeneratePeriodInfo,
   MidtransWebhookPayload,
   MidtransWebhookResult,
   MidtransSettlementInput,
   ReconcileInvoiceResult,
   ReconcileBatchResult,
   ReminderProcessResult,
+} from "./types"
+import {
+  DEFAULT_GENERATE_CATEGORIES,
+  GENERATABLE_INVOICE_CATEGORIES,
 } from "./types"
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServerClient>>
@@ -58,6 +75,88 @@ const BLOCKING_INVOICE_STATUSES = ["CANCELLED", "PAID_OLD_LINK"] as const
 /** Students eligible for billing/reminders (excludes withdrawn students only). */
 const BILLABLE_STUDENT_STATUSES = ["ACTIVE", "TEMPORARY_LEAVE"] as const
 
+type InvoiceStatusRow = { student_id: string; status: PaymentStatus; created_at: string }
+
+type StudentSubjectRow = { subject: KumonSubject; enrolled_at: string }
+
+function getStudentSubjects(student: {
+  student_subjects?: StudentSubjectRow[] | null
+}): StudentSubjectRow[] {
+  return (student.student_subjects ?? []).map((ss) => ({
+    subject: ss.subject,
+    enrolled_at: ss.enrolled_at,
+  }))
+}
+
+function evaluateStudentBillingEligibility(options: {
+  enrolledAt: string
+  subjects: StudentSubjectRow[]
+  billingMonth: number
+  billingYear: number
+  onLeave: boolean
+  invoiceStatus: PaymentStatus | null
+}) {
+  const beforeEnrollment = isBillingPeriodBeforeEnrollment(
+    options.enrolledAt,
+    options.billingMonth,
+    options.billingYear
+  )
+  const billableSubjects = beforeEnrollment
+    ? []
+    : filterSubjectsForBillingPeriod(
+        options.subjects,
+        options.billingMonth,
+        options.billingYear
+      )
+  const hasSubjects = billableSubjects.length > 0
+  const canGenerate =
+    !beforeEnrollment &&
+    canGenerateInvoiceForStudent({
+      onLeave: options.onLeave,
+      hasSubjects,
+      invoiceStatus: options.invoiceStatus,
+    })
+
+  return { beforeEnrollment, hasSubjects, billableSubjects, canGenerate }
+}
+
+function getEffectiveInvoiceStatus(
+  invoices: InvoiceStatusRow[]
+): PaymentStatus | null {
+  if (invoices.length === 0) return null
+
+  const active = invoices.find(
+    (inv) => !BLOCKING_INVOICE_STATUSES.includes(inv.status as (typeof BLOCKING_INVOICE_STATUSES)[number])
+  )
+  if (active) return active.status
+
+  const sorted = [...invoices].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )
+  return sorted[0]?.status ?? null
+}
+
+function invoiceStatusToCategory(status: PaymentStatus | null): GenerateInvoiceCategory {
+  return status ?? "no_invoice"
+}
+
+function canGenerateInvoiceForStudent(options: {
+  onLeave: boolean
+  hasSubjects: boolean
+  invoiceStatus: PaymentStatus | null
+}): boolean {
+  if (options.onLeave || !options.hasSubjects) return false
+  const category = invoiceStatusToCategory(options.invoiceStatus)
+  return GENERATABLE_INVOICE_CATEGORIES.includes(category)
+}
+
+function studentMatchesGenerateCategories(
+  invoiceStatus: PaymentStatus | null,
+  categories: GenerateInvoiceCategory[]
+): boolean {
+  return categories.includes(invoiceStatusToCategory(invoiceStatus))
+}
+
 function appendOrderId(existing: string[] | null | undefined, orderId: string): string[] {
   const ids = existing ?? []
   if (ids.includes(orderId)) return ids
@@ -70,6 +169,58 @@ function assertSupabaseOk(error: { message: string } | null, context: string): v
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function getErrorStatusCode(err: unknown): number | undefined {
+  if (err && typeof err === "object" && "statusCode" in err) {
+    return (err as { statusCode: number }).statusCode
+  }
+  return undefined
+}
+
+function isRetryableMidtransError(err: unknown): boolean {
+  const statusCode = getErrorStatusCode(err)
+  if (
+    statusCode === 429 ||
+    statusCode === 502 ||
+    statusCode === 503 ||
+    statusCode === 504
+  ) {
+    return true
+  }
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return (
+    message.includes("rate limit") ||
+    message.includes("too many") ||
+    message.includes("timeout") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout")
+  )
+}
+
+async function withMidtransRetry<T>(
+  fn: () => Promise<T>,
+  context: string
+): Promise<T> {
+  const maxAttempts = Number(process.env.MIDTRANS_RETRY_ATTEMPTS ?? 4)
+  const baseDelayMs = Number(process.env.MIDTRANS_RETRY_BASE_DELAY_MS ?? 2000)
+
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err
+      if (attempt === maxAttempts || !isRetryableMidtransError(err)) throw err
+      const delayMs = baseDelayMs * 2 ** (attempt - 1)
+      console.warn(
+        `Midtrans ${context} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms:`,
+        err
+      )
+      await sleep(delayMs)
+    }
+  }
+  throw lastErr
 }
 
 async function applyMidtransSettlement(
@@ -279,6 +430,90 @@ export const paymentService = {
     return data as unknown as InvoiceWithStudent
   },
 
+  async listGenerateCandidates(
+    month: number,
+    year: number
+  ): Promise<GenerateCandidatesResult> {
+    const supabase = await createSupabaseServerClient()
+
+    const { data: students } = await supabase
+      .from("students")
+      .select("id, full_name, status, enrolled_at, student_subjects(subject, enrolled_at)")
+      .in("status", [...BILLABLE_STUDENT_STATUSES])
+      .order("full_name", { ascending: true })
+
+    const period: GeneratePeriodInfo = {
+      is_past: isPastBillingPeriod(month, year),
+      fee_effective_month: null,
+      fee_effective_year: null,
+    }
+
+    if (!students || students.length === 0) {
+      return { candidates: [], period }
+    }
+
+    const { effectiveEntry } = await loadSubjectFeesForPeriod(supabase, month, year)
+    if (effectiveEntry) {
+      period.fee_effective_month = effectiveEntry.month
+      period.fee_effective_year = effectiveEntry.year
+    }
+
+    const studentIds = students.map((s) => s.id)
+
+    const { data: leaves } = await supabase
+      .from("temporary_leaves")
+      .select("student_id")
+      .eq("month", month)
+      .eq("year", year)
+      .in("student_id", studentIds)
+
+    const onLeaveIds = new Set((leaves ?? []).map((l) => l.student_id))
+
+    const { data: invoiceRows } = await supabase
+      .from("invoices")
+      .select("student_id, status, created_at")
+      .eq("month", month)
+      .eq("year", year)
+      .in("student_id", studentIds)
+
+    const invoicesByStudent = new Map<string, InvoiceStatusRow[]>()
+    for (const row of invoiceRows ?? []) {
+      const list = invoicesByStudent.get(row.student_id) ?? []
+      list.push(row as InvoiceStatusRow)
+      invoicesByStudent.set(row.student_id, list)
+    }
+
+    const candidates = students.map((student) => {
+      const subjects = getStudentSubjects(student as { student_subjects?: StudentSubjectRow[] })
+      const invoiceStatus = getEffectiveInvoiceStatus(
+        invoicesByStudent.get(student.id) ?? []
+      )
+      const onLeave = onLeaveIds.has(student.id)
+      const eligibility = evaluateStudentBillingEligibility({
+        enrolledAt: student.enrolled_at,
+        subjects,
+        billingMonth: month,
+        billingYear: year,
+        onLeave,
+        invoiceStatus,
+      })
+
+      return {
+        student_id: student.id,
+        full_name: student.full_name,
+        student_status: student.status as "ACTIVE" | "TEMPORARY_LEAVE",
+        enrolled_at: student.enrolled_at,
+        invoice_status: invoiceStatus,
+        on_leave: onLeave,
+        has_subjects: eligibility.hasSubjects,
+        before_enrollment: eligibility.beforeEnrollment,
+        can_generate: eligibility.canGenerate,
+      }
+    })
+
+    return { candidates, period }
+  },
+
   /** Manual admin flow (requires authenticated session). */
   async generateMonthly(input: GenerateMonthlyInput): Promise<GenerateResult> {
     const supabase = await createSupabaseServerClient()
@@ -311,24 +546,18 @@ export const paymentService = {
     }
   ): Promise<GenerateResult> {
     const { supabase, createdBy, createPaymentLinks } = options
-    const { month, year } = input
+    const { month, year, categories, student_ids } = input
+    const allowedCategories = categories ?? DEFAULT_GENERATE_CATEGORIES
+    const selectedStudentIds = student_ids ? new Set(student_ids) : null
 
     const marked_overdue = await markPriorInvoicesOverdue(supabase, month, year)
 
-    // Load subject fee config
-    const { data: feeConfigRow } = await supabase
-      .from("system_config")
-      .select("value")
-      .eq("key", "subject_fees")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .returns<{ value: Record<string, any> }[]>()
-      .single()
-    const feeConfig = parseSubjectFees(feeConfigRow?.value ?? {})
+    const { fees: feeConfig } = await loadSubjectFeesForPeriod(supabase, month, year)
 
     // Billable students; skip months covered by temporary_leaves (not status alone)
     const { data: students } = await supabase
       .from("students")
-      .select("id, school_level, student_subjects(subject)")
+      .select("id, school_level, enrolled_at, student_subjects(subject, enrolled_at)")
       .in("status", [...BILLABLE_STUDENT_STATUSES])
 
     if (!students || students.length === 0) {
@@ -337,6 +566,7 @@ export const paymentService = {
         skipped_on_leave: 0,
         skipped_existing: 0,
         skipped_no_subjects: 0,
+        skipped_before_enrollment: 0,
         invoice_ids: [],
         marked_overdue,
       }
@@ -353,19 +583,27 @@ export const paymentService = {
 
     const onLeaveIds = new Set((leaves ?? []).map((l) => l.student_id))
 
-    const { data: existing } = await supabase
+    const { data: invoiceRows } = await supabase
       .from("invoices")
-      .select("student_id")
+      .select("student_id, status, created_at")
       .eq("month", month)
       .eq("year", year)
       .in("student_id", studentIds)
-      .not("status", "in", `(${BLOCKING_INVOICE_STATUSES.join(",")})`)
 
-    const existingIds = new Set((existing ?? []).map((i) => i.student_id))
+    const invoicesByStudent = new Map<string, InvoiceStatusRow[]>()
+    for (const row of invoiceRows ?? []) {
+      const list = invoicesByStudent.get(row.student_id) ?? []
+      list.push(row as InvoiceStatusRow)
+      invoicesByStudent.set(row.student_id, list)
+    }
 
     const dueDate = toDateString(year, month, 20)
 
+    let skippedOnLeave = 0
+    let skippedExisting = 0
     let skippedNoSubjects = 0
+    let skippedBeforeEnrollment = 0
+    let skippedNotSelected = 0
 
     const invoicesWithLines: Array<{
       student_id: string
@@ -380,22 +618,53 @@ export const paymentService = {
     }> = []
 
     for (const student of students) {
-      if (onLeaveIds.has(student.id) || existingIds.has(student.id)) continue
+      if (selectedStudentIds && !selectedStudentIds.has(student.id)) {
+        skippedNotSelected++
+        continue
+      }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const subjects: KumonSubject[] = ((student as any).student_subjects ?? []).map(
-        (ss: { subject: KumonSubject }) => ss.subject
+      if (onLeaveIds.has(student.id)) {
+        skippedOnLeave++
+        continue
+      }
+
+      const subjects = getStudentSubjects(student as { student_subjects?: StudentSubjectRow[] })
+
+      if (isBillingPeriodBeforeEnrollment(student.enrolled_at, month, year)) {
+        skippedBeforeEnrollment++
+        continue
+      }
+
+      const billableSubjects = filterSubjectsForBillingPeriod(subjects, month, year)
+
+      if (billableSubjects.length === 0) {
+        skippedNoSubjects++
+        continue
+      }
+
+      const invoiceStatus = getEffectiveInvoiceStatus(
+        invoicesByStudent.get(student.id) ?? []
       )
 
-      if (subjects.length === 0) {
-        skippedNoSubjects++
+      if (!studentMatchesGenerateCategories(invoiceStatus, allowedCategories)) {
+        skippedExisting++
+        continue
+      }
+
+      if (!canGenerateInvoiceForStudent({
+        onLeave: false,
+        hasSubjects: true,
+        invoiceStatus,
+      })) {
+        skippedExisting++
         continue
       }
 
       const schoolLevel =
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ((student as any).school_level as SchoolLevel) ?? "ELEMENTARY"
-      const { lines, total } = computeInvoiceLineItems(schoolLevel, subjects, feeConfig)
+      const subjectKeys = billableSubjects.map((s) => s.subject)
+      const { lines, total } = computeInvoiceLineItems(schoolLevel, subjectKeys, feeConfig)
 
       invoicesWithLines.push({
         student_id: student.id,
@@ -413,9 +682,11 @@ export const paymentService = {
     if (invoicesWithLines.length === 0) {
       return {
         generated: 0,
-        skipped_on_leave: onLeaveIds.size,
-        skipped_existing: existingIds.size,
+        skipped_on_leave: skippedOnLeave,
+        skipped_existing: skippedExisting,
         skipped_no_subjects: skippedNoSubjects,
+        skipped_before_enrollment: skippedBeforeEnrollment,
+        skipped_not_selected: skippedNotSelected,
         invoice_ids: [],
         marked_overdue,
       }
@@ -458,18 +729,22 @@ export const paymentService = {
       )
     }
 
-    let paymentLinksCreated = 0
+    let linkResult: CheckoutLinksResult = { created: 0, failed: 0, failed_ids: [] }
     if (createPaymentLinks) {
-      paymentLinksCreated = await paymentService.createCheckoutLinksForInvoices(invoiceIds)
+      linkResult = await paymentService.createCheckoutLinksForInvoices(invoiceIds)
     }
 
     return {
       generated: invoiceIds.length,
-      skipped_on_leave: onLeaveIds.size,
-      skipped_existing: existingIds.size,
+      skipped_on_leave: skippedOnLeave,
+      skipped_existing: skippedExisting,
       skipped_no_subjects: skippedNoSubjects,
+      skipped_before_enrollment: skippedBeforeEnrollment,
+      skipped_not_selected: skippedNotSelected,
       invoice_ids: invoiceIds,
-      payment_links_created: paymentLinksCreated,
+      payment_links_created: linkResult.created,
+      payment_links_failed: linkResult.failed,
+      payment_link_failed_ids: linkResult.failed_ids,
       marked_overdue,
     }
   },
@@ -523,17 +798,26 @@ export const paymentService = {
     return paymentUrl
   },
 
-  async createCheckoutLinksForInvoices(invoiceIds: string[]): Promise<number> {
+  async createCheckoutLinksForInvoices(
+    invoiceIds: string[]
+  ): Promise<CheckoutLinksResult> {
+    const delayMs = Number(process.env.MIDTRANS_LINK_DELAY_MS ?? 500)
     let created = 0
-    for (const id of invoiceIds) {
+    const failed_ids: string[] = []
+
+    for (let i = 0; i < invoiceIds.length; i++) {
+      const id = invoiceIds[i]
       try {
         await paymentService.ensureCheckoutLink(id)
         created++
       } catch (err) {
         console.error(`Failed to create checkout link for invoice ${id}:`, err)
+        failed_ids.push(id)
       }
+      if (i < invoiceIds.length - 1) await sleep(delayMs)
     }
-    return created
+
+    return { created, failed: failed_ids.length, failed_ids }
   },
 
   async _createCheckout(
@@ -561,17 +845,21 @@ export const paymentService = {
         name: item.label,
       }))
 
-    const result = await snap.createTransaction({
-      transaction_details: {
-        order_id: orderId,
-        gross_amount: invoice.amount,
-      },
-      customer_details: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        first_name: (invoice as any).students?.full_name ?? "Siswa",
-      },
-      ...(lineItems.length > 0 ? { item_details: lineItems } : {}),
-    })
+    const result = await withMidtransRetry(
+      () =>
+        snap.createTransaction({
+          transaction_details: {
+            order_id: orderId,
+            gross_amount: invoice.amount,
+          },
+          customer_details: {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            first_name: (invoice as any).students?.full_name ?? "Siswa",
+          },
+          ...(lineItems.length > 0 ? { item_details: lineItems } : {}),
+        }),
+      `createTransaction for invoice ${invoiceId}`
+    )
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const invRow = invoice as any
@@ -612,7 +900,7 @@ export const paymentService = {
 
     const { data: invoice, error } = await supabase
       .from("invoices")
-      .select("*, students(school_level, student_subjects(subject))")
+      .select("*, students(school_level, enrolled_at, student_subjects(subject, enrolled_at))")
       .eq("id", invoiceId)
       .single()
 
@@ -621,7 +909,8 @@ export const paymentService = {
     const inv = invoice as Invoice & {
       students: {
         school_level: SchoolLevel
-        student_subjects: Array<{ subject: KumonSubject }>
+        enrolled_at: string
+        student_subjects: Array<{ subject: KumonSubject; enrolled_at: string }>
       }
     }
 
@@ -629,18 +918,23 @@ export const paymentService = {
       throw Errors.BAD_REQUEST("Hanya tagihan belum lunas yang dapat dihitung ulang.")
     }
 
-    const { data: feeConfigRow } = await supabase
-      .from("system_config")
-      .select("value")
-      .eq("key", "subject_fees")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .returns<{ value: Record<string, any> }[]>()
-      .single()
-    const feeConfig = parseSubjectFees(feeConfigRow?.value ?? {})
+    const { fees: feeConfig } = await loadSubjectFeesForPeriod(
+      supabase,
+      inv.month,
+      inv.year
+    )
 
     const schoolLevel = inv.students?.school_level ?? "ELEMENTARY"
-    const subjects = (inv.students?.student_subjects ?? []).map((ss) => ss.subject)
-    const { lines, total } = computeInvoiceLineItems(schoolLevel, subjects, feeConfig)
+    const allSubjects = (inv.students?.student_subjects ?? []).map((ss) => ({
+      subject: ss.subject,
+      enrolled_at: ss.enrolled_at,
+    }))
+    const billableSubjects = filterSubjectsForBillingPeriod(
+      allSubjects,
+      inv.month,
+      inv.year
+    ).map((s) => s.subject)
+    const { lines, total } = computeInvoiceLineItems(schoolLevel, billableSubjects, feeConfig)
 
     await invalidateMidtransOrder(inv.midtrans_order_id)
 
@@ -1164,6 +1458,41 @@ export const paymentService = {
     }
 
     return { ok: true, synced: false, message: "Belum ada pembayaran di Midtrans." }
+  },
+
+  /** Create Midtrans links for unpaid invoices that are missing one (cron backfill). */
+  async backfillMissingPaymentLinks(options?: {
+    month?: number
+    year?: number
+    batchLimit?: number
+  }): Promise<BackfillLinksResult> {
+    const batchLimit =
+      options?.batchLimit ?? Number(process.env.MIDTRANS_BACKFILL_BATCH_LIMIT ?? 50)
+
+    let query = supabaseAdmin
+      .from("invoices")
+      .select("id")
+      .in("status", ["PENDING", "OVERDUE"])
+      .is("midtrans_payment_url", null)
+      .order("created_at", { ascending: true })
+      .limit(batchLimit)
+
+    if (options?.month != null) query = query.eq("month", options.month)
+    if (options?.year != null) query = query.eq("year", options.year)
+
+    const { data: invoices, error } = await query
+    assertSupabaseOk(error, "invoices query")
+
+    const invoiceIds = (invoices ?? []).map((row) => row.id)
+    const linkResult = await paymentService.createCheckoutLinksForInvoices(invoiceIds)
+
+    const defaults = currentMonthYearInCenterTimezone()
+    return {
+      attempted: invoiceIds.length,
+      month: options?.month ?? defaults.month,
+      year: options?.year ?? defaults.year,
+      ...linkResult,
+    }
   },
 
   /** Batch reconcile unpaid invoices with Midtrans links (cron). */

@@ -9,6 +9,11 @@
       "schedule": "0 0 1 * *"
     },
     {
+      "path": "/api/cron/backfill-payment-links",
+      "schedule": "30 0 * * *",
+      "description": "Daily 07:30 WIB — retry Midtrans links for unpaid invoices missing one"
+    },
+    {
       "path": "/api/cron/send-reminders",
       "schedule": "0 2 1,11,21 * *",
       "description": "Slot 1 — 09:00 WIB: up to 100 current-month reminders (Phase 1)"

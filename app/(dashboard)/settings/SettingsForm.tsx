@@ -6,6 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Separator } from "@/components/ui/separator"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { SUBJECT_LABELS, SCHOOL_LEVEL_LABELS, ALL_SUBJECTS, parseSubjectFees } from "@/lib/billing/fees"
 import type { KumonSubject } from "@/lib/billing/fees"
 
@@ -31,7 +40,6 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
     String(getNum(initialConfig, "max_leave_months", "months"))
   )
 
-  // Subject fees — 2 tiers × 3 subjects
   const parsedFees = parseSubjectFees(
     (initialConfig["subject_fees"] as Record<string, unknown>) ?? {}
   )
@@ -87,13 +95,13 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
   }
 
   return (
-    <div className="max-w-2xl space-y-4">
+    <div className="max-w-2xl space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Informasi Center</CardTitle>
+          <CardTitle>Informasi Center</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="center_name">Nama Center</Label>
             <Input
               id="center_name"
@@ -106,31 +114,37 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Biaya SPP per Mata Pelajaran</CardTitle>
+          <CardTitle>Biaya SPP per Mata Pelajaran</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-muted-foreground text-xs">
-            Perubahan harga berlaku untuk tagihan baru. Tagihan yang sudah dibuat tidak berubah.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr>
-                  <th className="text-muted-foreground py-2 pr-4 text-left font-medium">Tingkat</th>
+          <div className="space-y-2 rounded-lg border border-[var(--warning-border)] bg-[var(--warning-muted)] px-4 py-3 text-sm text-[var(--warning-foreground)]">
+            <p className="font-medium">Tarif baru berlaku sejak bulan ini</p>
+            <p className="text-[var(--warning-foreground)]/90">
+              Jika Anda menyimpan perubahan di tengah bulan, tarif baru dipakai untuk tagihan
+              bulan berjalan dan bulan-bulan setelahnya — bukan hanya mulai bulan depan.
+            </p>
+            <p className="text-[var(--warning-foreground)]/90">
+              Tagihan yang sudah dibuat sebelumnya tidak berubah otomatis. Hanya tagihan baru
+              atau tagihan yang dihitung ulang (belum lunas) yang memakai tarif terbaru.
+            </p>
+          </div>
+          <div className="overflow-hidden rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Tingkat</TableHead>
                   {ALL_SUBJECTS.map((s) => (
-                    <th key={s} className="text-muted-foreground py-2 px-2 text-left font-medium">
-                      {SUBJECT_LABELS[s]}
-                    </th>
+                    <TableHead key={s}>{SUBJECT_LABELS[s]}</TableHead>
                   ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                <tr>
-                  <td className="py-2 pr-4 font-medium">{SCHOOL_LEVEL_LABELS.ELEMENTARY}</td>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow>
+                  <TableCell className="font-medium">{SCHOOL_LEVEL_LABELS.ELEMENTARY}</TableCell>
                   {ALL_SUBJECTS.map((s) => {
                     const key = s.toLowerCase() as Lowercase<KumonSubject>
                     return (
-                      <td key={s} className="py-2 px-2">
+                      <TableCell key={s}>
                         <Input
                           type="number"
                           className="w-32"
@@ -139,16 +153,16 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
                             setElementaryFees((prev) => ({ ...prev, [key]: e.target.value }))
                           }
                         />
-                      </td>
+                      </TableCell>
                     )
                   })}
-                </tr>
-                <tr>
-                  <td className="py-2 pr-4 font-medium">{SCHOOL_LEVEL_LABELS.SECONDARY}</td>
+                </TableRow>
+                <TableRow>
+                  <TableCell className="font-medium">{SCHOOL_LEVEL_LABELS.SECONDARY}</TableCell>
                   {ALL_SUBJECTS.map((s) => {
                     const key = s.toLowerCase() as Lowercase<KumonSubject>
                     return (
-                      <td key={s} className="py-2 px-2">
+                      <TableCell key={s}>
                         <Input
                           type="number"
                           className="w-32"
@@ -157,22 +171,22 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
                             setSecondaryFees((prev) => ({ ...prev, [key]: e.target.value }))
                           }
                         />
-                      </td>
+                      </TableCell>
                     )
                   })}
-                </tr>
-              </tbody>
-            </table>
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Aturan Cuti</CardTitle>
+          <CardTitle>Aturan Cuti</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="max_leave">Maks. Bulan Cuti Berturut-turut</Label>
             <Input
               id="max_leave"
@@ -184,7 +198,9 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
         </CardContent>
       </Card>
 
-      <Button onClick={handleSave} disabled={isLoading}>
+      <Separator />
+
+      <Button onClick={handleSave} disabled={isLoading} className="h-10 px-6">
         {isLoading ? "Menyimpan..." : "Simpan Pengaturan"}
       </Button>
     </div>

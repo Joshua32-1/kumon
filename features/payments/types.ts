@@ -59,9 +59,54 @@ export interface PaymentReminder {
   message_preview: string | null
 }
 
+export type GenerateInvoiceCategory = PaymentStatus | "no_invoice"
+
+export const GENERATABLE_INVOICE_CATEGORIES: GenerateInvoiceCategory[] = [
+  "no_invoice",
+  "CANCELLED",
+  "PAID_OLD_LINK",
+]
+
+export const DEFAULT_GENERATE_CATEGORIES: GenerateInvoiceCategory[] = [
+  "no_invoice",
+  "CANCELLED",
+  "PAID_OLD_LINK",
+]
+
 export interface GenerateMonthlyInput {
   month: number
   year: number
+  categories?: GenerateInvoiceCategory[]
+  student_ids?: string[]
+}
+
+export interface GenerateCandidate {
+  student_id: string
+  full_name: string
+  student_status: "ACTIVE" | "TEMPORARY_LEAVE"
+  enrolled_at: string
+  invoice_status: PaymentStatus | null
+  on_leave: boolean
+  has_subjects: boolean
+  before_enrollment: boolean
+  can_generate: boolean
+}
+
+export interface GeneratePeriodInfo {
+  is_past: boolean
+  fee_effective_month: number | null
+  fee_effective_year: number | null
+}
+
+export interface GenerateCandidatesResult {
+  candidates: GenerateCandidate[]
+  period: GeneratePeriodInfo
+}
+
+export interface CheckoutLinksResult {
+  created: number
+  failed: number
+  failed_ids: string[]
 }
 
 export interface GenerateResult {
@@ -69,9 +114,19 @@ export interface GenerateResult {
   skipped_on_leave: number
   skipped_existing: number
   skipped_no_subjects: number
+  skipped_before_enrollment: number
+  skipped_not_selected?: number
   invoice_ids: string[]
   payment_links_created?: number
+  payment_links_failed?: number
+  payment_link_failed_ids?: string[]
   marked_overdue: number
+}
+
+export interface BackfillLinksResult extends CheckoutLinksResult {
+  attempted: number
+  month?: number
+  year?: number
 }
 
 export interface ReminderProcessResult {

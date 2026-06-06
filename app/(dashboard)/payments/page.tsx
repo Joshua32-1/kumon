@@ -1,10 +1,11 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { PageHeader } from "@/components/shared/PageHeader"
+import { FilterPill } from "@/components/shared/FilterPill"
+import { PeriodSelector } from "@/components/shared/PeriodSelector"
 import { PaymentTable } from "@/features/payments/components/PaymentTable"
 import { GenerateInvoicesDialog } from "@/features/payments/components/GenerateInvoicesDialog"
 import { Button } from "@/components/ui/button"
@@ -57,14 +58,12 @@ export default function PaymentsPage() {
     }
   }, [searchParams])
 
-  // arrears view shows all months at once, sorted oldest first
   const [arrearsView, setArrearsView] = useState(false)
   const [attentionOnly, setAttentionOnly] = useState(false)
   const [month, setMonth] = useState(defaultMonth)
   const [year, setYear] = useState(defaultYear)
   const [generateOpen, setGenerateOpen] = useState(false)
 
-  // Initialise from URL params on first render
   useEffect(() => {
     if (searchParams.get("view") === "arrears") setArrearsView(true)
     if (searchParams.get("attention") === "1") setAttentionOnly(true)
@@ -87,7 +86,6 @@ export default function PaymentsPage() {
     fetcher
   )
 
-  // In arrears view, client-filter to only show overdue/past-due
   const baseInvoices = arrearsView
     ? allInvoices
         .filter((inv) => isArrearsInvoice(inv, today))
@@ -132,92 +130,64 @@ export default function PaymentsPage() {
         }
       />
 
-      {/* View toggle: bulan ini vs semua tunggakan */}
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => { setArrearsView(false); setStatusFilter("") }}
-          className={`rounded-md border px-3 py-1 text-sm transition-colors ${
-            !arrearsView
-              ? "bg-primary text-primary-foreground border-primary"
-              : "border-border hover:bg-muted"
-          }`}
-        >
-          Bulan ini
-        </button>
-        <button
-          onClick={() => { setArrearsView(true); setStatusFilter("") }}
-          className={`rounded-md border px-3 py-1 text-sm transition-colors ${
-            arrearsView
-              ? "bg-red-600 text-white border-red-600"
-              : "border-border hover:bg-muted"
-          }`}
-        >
-          Semua tunggakan
-        </button>
-      </div>
-
-      {/* Month / year selectors (only in bulan ini mode) */}
-      {!arrearsView && (
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={month}
-            onChange={(e) => setMonth(Number(e.target.value))}
-            className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-          >
-            {MONTHS.map((m) => (
-              <option key={m} value={m}>{MONTH_NAMES[m - 1]}</option>
-            ))}
-          </select>
-          <select
-            value={year}
-            onChange={(e) => setYear(Number(e.target.value))}
-            className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-          >
-            {YEARS.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-4 shadow-card">
+          <FilterPill
+            label="Bulan ini"
+            active={!arrearsView}
+            onClick={() => { setArrearsView(false); setStatusFilter("") }}
+          />
+          <FilterPill
+            label="Semua tunggakan"
+            active={arrearsView}
+            variant="danger"
+            onClick={() => { setArrearsView(true); setStatusFilter("") }}
+          />
         </div>
-      )}
 
-      {/* Status filters (only in bulan ini mode) */}
-      {!arrearsView && (
-        <div className="flex flex-wrap gap-2">
-          {STATUS_FILTERS.map((f) => (
-            <button
-              key={f.value}
-              onClick={() => setStatusFilter(f.value)}
-              className={`rounded-md border px-3 py-1 text-sm transition-colors ${
-                statusFilter === f.value
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "border-border hover:bg-muted"
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Attention filter — shown in both modes */}
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => setAttentionOnly((v) => !v)}
-          className={`rounded-md border px-3 py-1 text-sm transition-colors ${
-            attentionOnly
-              ? "bg-red-600 text-white border-red-600"
-              : "border-border hover:bg-muted"
-          }`}
-        >
-          Perlu tindakan{attentionCount > 0 ? ` (${attentionCount})` : ""}
-        </button>
-        {(deliveryCount > 0 || collectionCount > 0) && (
-          <span className="self-center text-xs text-muted-foreground">
-            {deliveryCount > 0 && `${deliveryCount} WA`}
-            {deliveryCount > 0 && collectionCount > 0 && " · "}
-            {collectionCount > 0 && `${collectionCount} tunggakan`}
-          </span>
+        {!arrearsView && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-4 shadow-card">
+            <PeriodSelector
+              month={month}
+              year={year}
+              onMonthChange={setMonth}
+              onYearChange={setYear}
+              monthNames={MONTH_NAMES}
+              months={MONTHS}
+              years={YEARS}
+              label="Periode:"
+            />
+          </div>
         )}
+
+        {!arrearsView && (
+          <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-card p-4 shadow-card">
+            {STATUS_FILTERS.map((f) => (
+              <FilterPill
+                key={f.value}
+                label={f.label}
+                active={statusFilter === f.value}
+                onClick={() => setStatusFilter(f.value)}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-4 shadow-card">
+          <FilterPill
+            label={`Perlu tindakan${attentionCount > 0 ? ` (${attentionCount})` : ""}`}
+            active={attentionOnly}
+            variant="attention"
+            onClick={() => setAttentionOnly((v) => !v)}
+          />
+          {(deliveryCount > 0 || collectionCount > 0) && (
+            <span className="self-center text-xs text-muted-foreground">
+              {deliveryCount > 0 && `${deliveryCount} WA`}
+              {deliveryCount > 0 && collectionCount > 0 && " · "}
+              {collectionCount > 0 && `${collectionCount} tunggakan`}
+            </span>
+          )}
+        </div>
       </div>
 
       <PaymentTable invoices={invoices} isLoading={isLoading} />

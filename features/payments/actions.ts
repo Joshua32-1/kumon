@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { paymentService } from "./service"
-import { generateMonthlySchema } from "./validations"
+import { generateMonthlySchema, generateCandidatesSchema } from "./validations"
 import type { GenerateMonthlyInput } from "./types"
 
 export async function generateMonthlyAction(input: GenerateMonthlyInput) {
@@ -12,6 +12,18 @@ export async function generateMonthlyAction(input: GenerateMonthlyInput) {
   }
   const result = await paymentService.generateMonthly(parsed.data)
   revalidatePath("/payments")
+  return { data: result }
+}
+
+export async function listGenerateCandidatesAction(input: { month: number; year: number }) {
+  const parsed = generateCandidatesSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const result = await paymentService.listGenerateCandidates(
+    parsed.data.month,
+    parsed.data.year
+  )
   return { data: result }
 }
 
