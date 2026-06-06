@@ -2,8 +2,19 @@
 
 import { revalidatePath } from "next/cache"
 import { studentService } from "./service"
-import { createStudentSchema, updateStudentSchema, setLeaveSchema } from "./validations"
-import type { CreateStudentInput, UpdateStudentInput } from "./types"
+import {
+  createStudentSchema,
+  updateStudentSchema,
+  updateEnrollmentSchema,
+  updateContactSchema,
+  setLeaveSchema,
+} from "./validations"
+import type {
+  CreateStudentInput,
+  UpdateStudentInput,
+  UpdateEnrollmentInput,
+  UpdateContactInput,
+} from "./types"
 
 export async function createStudentAction(input: CreateStudentInput) {
   const parsed = createStudentSchema.safeParse(input)
@@ -26,8 +37,37 @@ export async function updateStudentAction(id: string, input: UpdateStudentInput)
   return { data: student }
 }
 
+export async function updateEnrollmentAction(id: string, input: UpdateEnrollmentInput) {
+  const parsed = updateEnrollmentSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  await studentService.updateEnrollment(id, parsed.data)
+  revalidatePath("/students")
+  revalidatePath(`/students/${id}`)
+  return { data: true }
+}
+
+export async function updateContactAction(id: string, input: UpdateContactInput) {
+  const parsed = updateContactSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const contact = await studentService.updatePrimaryContact(id, parsed.data)
+  revalidatePath("/students")
+  revalidatePath(`/students/${id}`)
+  return { data: contact }
+}
+
 export async function deactivateStudentAction(id: string) {
   await studentService.deactivate(id)
+  revalidatePath("/students")
+  revalidatePath(`/students/${id}`)
+  return { data: true }
+}
+
+export async function reactivateStudentAction(id: string) {
+  await studentService.reactivate(id)
   revalidatePath("/students")
   revalidatePath(`/students/${id}`)
   return { data: true }

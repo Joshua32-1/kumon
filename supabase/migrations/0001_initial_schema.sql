@@ -127,7 +127,7 @@ CREATE TABLE system_config (
 );
 
 INSERT INTO system_config (key, value) VALUES
-  ('monthly_fee',       '{"amount": 500000}'),
+  ('subject_fees',      '{"elementary": {"english": 480000, "indonesian": 480000, "mathematics": 480000}, "secondary": {"english": 530000, "indonesian": 530000, "mathematics": 530000}}'),
   ('reminder_days',     '{"days": [1, 11, 21]}'),
   ('max_leave_months',  '{"months": 3}'),
   ('center_name',       '{"name": "Kumon Center"}'),

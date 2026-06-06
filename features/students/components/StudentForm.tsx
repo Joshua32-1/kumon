@@ -24,8 +24,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { Separator } from "@/components/ui/separator"
+import { ALL_SUBJECTS, SUBJECT_LABELS, SCHOOL_LEVEL_LABELS } from "@/lib/billing/fees"
+import { ALL_GRADES, GRADE_LABELS, gradeToSchoolLevel } from "@/lib/billing/grades"
+import type { KumonSubject } from "@/lib/billing/fees"
+import type { StudentGrade } from "@/lib/billing/grades"
 
 type FormValues = z.infer<typeof createStudentSchema>
 
@@ -37,11 +42,17 @@ export function StudentForm() {
     resolver: zodResolver(createStudentSchema),
     defaultValues: {
       full_name: "",
-      grade: "",
+      grade: "SD_1",
+      subjects: [],
       notes: "",
       contact: { full_name: "", relationship: "Ibu", whatsapp_number: "" },
     },
   })
+
+  const selectedGrade = form.watch("grade") as StudentGrade | undefined
+  const tierLabel = selectedGrade
+    ? SCHOOL_LEVEL_LABELS[gradeToSchoolLevel(selectedGrade)]
+    : "—"
 
   async function onSubmit(values: FormValues) {
     const result = await createStudentAction(values)
@@ -51,6 +62,17 @@ export function StudentForm() {
     }
     toast.success("Siswa berhasil ditambahkan.")
     router.push("/students")
+  }
+
+  const selectedSubjects = form.watch("subjects") ?? []
+
+  function toggleSubject(subject: KumonSubject) {
+    const current = form.getValues("subjects") ?? []
+    if (current.includes(subject)) {
+      form.setValue("subjects", current.filter((s) => s !== subject), { shouldValidate: true })
+    } else {
+      form.setValue("subjects", [...current, subject], { shouldValidate: true })
+    }
   }
 
   return (
@@ -79,9 +101,47 @@ export function StudentForm() {
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Kelas</FormLabel>
-                <FormControl>
-                  <Input placeholder="SD 3, SMP 1, dll." {...field} />
-                </FormControl>
+                <Select onValueChange={field.onChange} value={field.value}>
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Pilih kelas" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {ALL_GRADES.map((grade) => (
+                      <SelectItem key={grade} value={grade}>
+                        {GRADE_LABELS[grade]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-muted-foreground text-xs">
+                  Tingkat tagihan: {tierLabel}
+                </p>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="subjects"
+            render={() => (
+              <FormItem>
+                <FormLabel>Mata Pelajaran</FormLabel>
+                <div className="flex flex-wrap gap-4 pt-1">
+                  {ALL_SUBJECTS.map((subject) => (
+                    <label
+                      key={subject}
+                      className="flex cursor-pointer items-center gap-2 text-sm"
+                    >
+                      <Checkbox
+                        checked={selectedSubjects.includes(subject)}
+                        onCheckedChange={() => toggleSubject(subject)}
+                      />
+                      {SUBJECT_LABELS[subject]}
+                    </label>
+                  ))}
+                </div>
                 <FormMessage />
               </FormItem>
             )}

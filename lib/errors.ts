@@ -19,6 +19,13 @@ export const Errors = {
     new AppError("LEAVE_EXISTS", "Leave already set for this month", 409),
   LEAVE_NOT_FOUND: () => new AppError("LEAVE_NOT_FOUND", "Leave record not found", 404),
   INVALID_STATUS: () => new AppError("INVALID_STATUS", "Invalid status transition"),
+  BAD_REQUEST: (msg = "Bad request") => new AppError("BAD_REQUEST", msg, 400),
+  OUTSIDE_PROMOTION_WINDOW: () =>
+    new AppError(
+      "OUTSIDE_PROMOTION_WINDOW",
+      "Grade promotion is only allowed in July (WIB) unless force and promotionYear are provided",
+      400
+    ),
   WEBHOOK_INVALID: () =>
     new AppError("WEBHOOK_INVALID", "Invalid webhook signature", 401),
   UNAUTHORIZED: () => new AppError("UNAUTHORIZED", "Unauthorized", 401),

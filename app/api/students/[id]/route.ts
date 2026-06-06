@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server"
 import { studentService } from "@/features/students/service"
-import { updateStudentSchema } from "@/features/students/validations"
+import { updateStudentSchema, updateEnrollmentSchema, updateContactSchema } from "@/features/students/validations"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 
@@ -25,6 +25,25 @@ export async function PATCH(
   try {
     const { id } = await params
     const body = await request.json()
+
+    if ("subjects" in body) {
+      const parsed = updateEnrollmentSchema.safeParse(body)
+      if (!parsed.success) {
+        return apiError("VALIDATION_ERROR", JSON.stringify(parsed.error.flatten()), 422)
+      }
+      await studentService.updateEnrollment(id, parsed.data)
+      return apiSuccess({ updated: true })
+    }
+
+    if ("contact" in body) {
+      const parsed = updateContactSchema.safeParse(body.contact)
+      if (!parsed.success) {
+        return apiError("VALIDATION_ERROR", JSON.stringify(parsed.error.flatten()), 422)
+      }
+      const contact = await studentService.updatePrimaryContact(id, parsed.data)
+      return apiSuccess(contact)
+    }
+
     const parsed = updateStudentSchema.safeParse(body)
     if (!parsed.success) {
       return apiError("VALIDATION_ERROR", JSON.stringify(parsed.error.flatten()), 422)

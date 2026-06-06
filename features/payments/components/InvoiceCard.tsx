@@ -4,12 +4,22 @@ import { useState } from "react"
 import { toast } from "sonner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { PaymentStatusBadge } from "./PaymentStatusBadge"
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { formatRupiah, getMonthName, formatDate } from "@/lib/utils"
-import { markPaidAction, waiveAction, cancelInvoiceAction, createCheckoutAction } from "../actions"
+import { getBillingSummary, WA_STATUS_LABELS } from "@/features/payments/billing-summary"
+import {
+  markPaidAction,
+  waiveAction,
+  cancelInvoiceAction,
+  regenerateInvoiceAction,
+  sendReminderNowAction,
+  markReminderSentManuallyAction,
+  getReminderMessagePreviewAction,
+  sendConfirmationAction,
+  reconcileMidtransAction,
+} from "../actions"
 import type { InvoiceWithStudent, PaymentReminder } from "../types"
 
 interface InvoiceCardProps {
@@ -21,8 +31,14 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
   const [waiveOpen, setWaiveOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [markManualReminderId, setMarkManualReminderId] = useState<string | null>(null)
+  const [regenerateOpen, setRegenerateOpen] = useState(false)
 
   const isPending = invoice.status === "PENDING" || invoice.status === "OVERDUE"
+  const isPaidOldLink = invoice.status === "PAID_OLD_LINK"
+  const lineItems = invoice.invoice_line_items ?? []
+  const reminders = invoice.payment_reminders ?? []
+  const summary = getBillingSummary(invoice, reminders)
 
   async function handleMarkPaid() {
     setIsProcessing(true)
@@ -30,6 +46,22 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
     toast.success("Pembayaran dicatat sebagai lunas.")
     setIsProcessing(false)
     onUpdate?.()
+  }
+
+  async function handleReconcileMidtrans() {
+    setIsProcessing(true)
+    const result = await reconcileMidtransAction(invoice.id)
+    setIsProcessing(false)
+    if (!result.ok) {
+      toast.error(result.message)
+      return
+    }
+    if (result.synced) {
+      toast.success(result.message)
+      onUpdate?.()
+    } else {
+      toast.info(result.message)
+    }
   }
 
   async function handleWaive() {
@@ -50,18 +82,76 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
     onUpdate?.()
   }
 
-  async function handleCreateCheckout() {
+  async function handleRegenerate() {
     setIsProcessing(true)
-    const result = await createCheckoutAction(invoice.id)
+    const result = await regenerateInvoiceAction(invoice.id)
     setIsProcessing(false)
     if ("data" in result && result.data?.paymentUrl) {
       navigator.clipboard.writeText(result.data.paymentUrl)
-      toast.success("Link pembayaran disalin ke clipboard.")
+      toast.success("Tagihan dihitung ulang. Link baru disalin ke clipboard.")
+      setRegenerateOpen(false)
       onUpdate?.()
     } else {
-      toast.error("Gagal membuat link pembayaran.")
+      toast.error("Gagal menghitung ulang tagihan.")
     }
   }
+
+  async function handleSendReminderNow(reminderId?: string) {
+    setIsProcessing(true)
+    const result = await sendReminderNowAction(invoice.id, reminderId)
+    setIsProcessing(false)
+    if (result.ok) {
+      toast.success("Pengingat WhatsApp berhasil dikirim.")
+      onUpdate?.()
+    } else {
+      toast.error(`Gagal mengirim: ${result.error ?? "unknown error"}`)
+    }
+  }
+
+  async function handleMarkManualSent(reminderId: string) {
+    setIsProcessing(true)
+    await markReminderSentManuallyAction(reminderId, invoice.id)
+    setIsProcessing(false)
+    setMarkManualReminderId(null)
+    toast.success("Pengingat ditandai terkirim secara manual.")
+    onUpdate?.()
+  }
+
+  async function handleCopyMessage() {
+    setIsProcessing(true)
+    const result = await getReminderMessagePreviewAction(invoice.id)
+    setIsProcessing(false)
+    if (result) {
+      navigator.clipboard.writeText(result.message)
+      toast.success(`Pesan disalin. Kirim ke: ${result.whatsappNumber}`)
+    } else {
+      toast.error("Gagal membuat pesan. Pastikan kontak dan link tersedia.")
+    }
+  }
+
+  async function handleSendConfirmation() {
+    setIsProcessing(true)
+    const result = await sendConfirmationAction(invoice.id)
+    setIsProcessing(false)
+    if (result.ok) {
+      toast.success("Konfirmasi pembayaran berhasil dikirim.")
+    } else {
+      toast.error(`Gagal mengirim konfirmasi: ${result.error ?? "unknown error"}`)
+    }
+  }
+
+  const attentionMessage: { text: string; variant: "orange" | "red" } | null =
+    summary.attentionReason === "delivery"
+      ? summary.whatsappStatus === "no_link"
+        ? { text: "Link Midtrans belum dibuat. Buat link agar bisa dikirim ke orang tua.", variant: "orange" }
+        : summary.whatsappStatus === "send_failed"
+        ? { text: "Pengiriman WhatsApp gagal. Coba kirim ulang atau salin pesan secara manual.", variant: "orange" }
+        : summary.whatsappStatus === "partial_failed"
+        ? { text: "Sebagian pengingat gagal dikirim. Periksa dan coba kirim ulang.", variant: "orange" }
+        : { text: "Link belum dikirim ke orang tua.", variant: "orange" }
+      : summary.attentionReason === "collection"
+      ? { text: "Tagihan belum lunas. Orang tua sudah dihubungi — tindak lanjuti jika perlu.", variant: "red" }
+      : null
 
   return (
     <>
@@ -78,11 +168,56 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
           <PaymentStatusBadge status={invoice.status} />
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <p className="text-muted-foreground">Tagihan</p>
-              <p className="font-semibold">{formatRupiah(invoice.amount)}</p>
+          {/* Attention banner */}
+          {attentionMessage && (
+            <div className={`rounded-md border px-3 py-2 text-sm ${
+              attentionMessage.variant === "red"
+                ? "border-red-200 bg-red-50 text-red-800"
+                : "border-orange-200 bg-orange-50 text-orange-800"
+            }`}>
+              {attentionMessage.text}
             </div>
+          )}
+
+          {isPaidOldLink && (
+            <div className="rounded-md border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-900">
+              <p className="font-medium">Pembayaran via link lama</p>
+              <p className="mt-1">
+                Orang tua membayar link yang sudah tidak berlaku (tagihan dibatalkan/dibebaskan
+                atau diganti). Hubungi orang tua untuk konfirmasi — pertimbangkan refund atau
+                alokasi ke tagihan aktif.
+              </p>
+              {invoice.midtrans_transaction_id && (
+                <p className="mt-1 text-xs text-purple-700">
+                  ID transaksi: {invoice.midtrans_transaction_id}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Line items breakdown */}
+          {lineItems.length > 0 && (
+            <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1">
+              {lineItems.map((item) => (
+                <div key={item.subject} className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">{item.label}</span>
+                  <span className="font-medium">{formatRupiah(item.unit_amount)}</span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between border-t pt-1 text-sm font-semibold">
+                <span>Total</span>
+                <span>{formatRupiah(invoice.amount)}</span>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            {lineItems.length === 0 && (
+              <div>
+                <p className="text-muted-foreground">Tagihan</p>
+                <p className="font-semibold">{formatRupiah(invoice.amount)}</p>
+              </div>
+            )}
             <div>
               <p className="text-muted-foreground">Jatuh Tempo</p>
               <p className="font-medium">{formatDate(invoice.due_date)}</p>
@@ -93,6 +228,10 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
                 <p className="font-medium">{formatDate(invoice.paid_at)}</p>
               </div>
             )}
+            <div>
+              <p className="text-muted-foreground">Status WA</p>
+              <p className="font-medium">{WA_STATUS_LABELS[summary.whatsappStatus]}</p>
+            </div>
             {invoice.notes && (
               <div>
                 <p className="text-muted-foreground">Catatan</p>
@@ -116,38 +255,105 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
           )}
 
           {/* Reminders */}
-          {invoice.payment_reminders && invoice.payment_reminders.length > 0 && (
-            <div className="space-y-1">
+          {reminders.length > 0 && (
+            <div className="space-y-2">
               <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
                 Pengingat
               </p>
-              {invoice.payment_reminders.map((r) => (
-                <div key={r.id} className="flex items-center justify-between text-xs">
-                  <span>
-                    Pengingat {r.reminder_number} —{" "}
-                    {new Date(r.scheduled_date).toLocaleDateString("id-ID", {
-                      day: "numeric",
-                      month: "short",
-                    })}
-                  </span>
-                  <StatusBadge status={r.status} />
-                </div>
-              ))}
+              {reminders
+                .slice()
+                .sort((a, b) => a.reminder_number - b.reminder_number)
+                .map((r) => (
+                  <div
+                    key={r.id}
+                    className="rounded-md border bg-muted/20 px-3 py-2 space-y-1"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span>
+                        Pengingat {r.reminder_number} —{" "}
+                        {new Date(r.scheduled_date).toLocaleDateString("id-ID", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                        {r.sent_at && (
+                          <span className="text-muted-foreground ml-1">
+                            · dikirim {new Date(r.sent_at).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+                          </span>
+                        )}
+                      </span>
+                      <StatusBadge status={r.status} />
+                    </div>
+
+                    {r.status === "FAILED" && r.message_preview && (
+                      <p className="text-xs text-red-600 truncate" title={r.message_preview}>
+                        {r.message_preview}
+                      </p>
+                    )}
+
+                    {isPending && (
+                      <div className="flex gap-1.5 pt-0.5">
+                        <button
+                          onClick={() => handleSendReminderNow(r.id)}
+                          disabled={isProcessing}
+                          className="text-xs text-primary hover:underline disabled:opacity-50"
+                        >
+                          Kirim ulang
+                        </button>
+                        <span className="text-muted-foreground text-xs">·</span>
+                        <button
+                          onClick={() => setMarkManualReminderId(r.id)}
+                          disabled={isProcessing}
+                          className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+                        >
+                          Tandai terkirim manual
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
             </div>
           )}
 
+          {/* Action buttons */}
           {isPending && (
             <div className="flex flex-wrap gap-2">
+              {invoice.midtrans_order_id && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleReconcileMidtrans}
+                  disabled={isProcessing}
+                >
+                  Sinkronkan Midtrans
+                </Button>
+              )}
               <Button size="sm" onClick={handleMarkPaid} disabled={isProcessing}>
                 Tandai Lunas
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={handleCreateCheckout}
+                onClick={() => handleSendReminderNow()}
                 disabled={isProcessing}
               >
-                {invoice.midtrans_payment_url ? "Buat Ulang Link" : "Buat Link Bayar"}
+                Kirim WA sekarang
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCopyMessage}
+                disabled={isProcessing}
+              >
+                Salin pesan WA
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setRegenerateOpen(true)}
+                disabled={isProcessing}
+              >
+                Hitung ulang tagihan
               </Button>
               <Button
                 size="sm"
@@ -167,6 +373,17 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
               </Button>
             </div>
           )}
+
+          {invoice.status === "PAID" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSendConfirmation}
+              disabled={isProcessing}
+            >
+              Kirim konfirmasi pembayaran
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -183,10 +400,28 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
         open={cancelOpen}
         onOpenChange={setCancelOpen}
         title="Batalkan Tagihan"
-        description="Tagihan ini akan dibatalkan. Tindakan ini tidak dapat dibatalkan."
+        description="Tagihan dibatalkan dan link Midtrans dinonaktifkan (sebaiknya). Orang tua tidak perlu membayar tagihan ini; Anda dapat membuat tagihan baru untuk bulan yang sama nanti."
         confirmLabel="Batalkan Tagihan"
         variant="destructive"
         onConfirm={handleCancel}
+        isLoading={isProcessing}
+      />
+      <ConfirmDialog
+        open={regenerateOpen}
+        onOpenChange={setRegenerateOpen}
+        title="Hitung Ulang Tagihan"
+        description="Jumlah dan rincian mata pelajaran diperbarui dari data siswa saat ini. Link Midtrans lama dinonaktifkan dan link baru dibuat."
+        confirmLabel="Hitung Ulang"
+        onConfirm={handleRegenerate}
+        isLoading={isProcessing}
+      />
+      <ConfirmDialog
+        open={!!markManualReminderId}
+        onOpenChange={(o) => { if (!o) setMarkManualReminderId(null) }}
+        title="Tandai Terkirim Manual"
+        description="Pengingat ini akan ditandai sebagai terkirim tanpa melalui WhatsApp otomatis. Gunakan jika Anda sudah mengirim link secara manual."
+        confirmLabel="Tandai Terkirim"
+        onConfirm={() => markManualReminderId && handleMarkManualSent(markManualReminderId)}
         isLoading={isProcessing}
       />
     </>

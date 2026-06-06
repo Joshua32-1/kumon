@@ -41,3 +41,50 @@ export async function createCheckoutAction(invoiceId: string) {
   revalidatePath(`/payments/${invoiceId}`)
   return { data: result }
 }
+
+export async function regenerateInvoiceAction(invoiceId: string) {
+  const result = await paymentService.regenerateInvoice(invoiceId)
+  revalidatePath("/payments")
+  revalidatePath(`/payments/${invoiceId}`)
+  revalidatePath("/students")
+  return { data: result }
+}
+
+export async function sendReminderNowAction(invoiceId: string, reminderId?: string) {
+  const result = await paymentService.sendPaymentReminderForInvoice(invoiceId, {
+    reminderId,
+    ignoreSchedule: true,
+    initiatedBy: "admin",
+  })
+  revalidatePath("/payments")
+  revalidatePath(`/payments/${invoiceId}`)
+  revalidatePath("/students")
+  return result
+}
+
+export async function markReminderSentManuallyAction(reminderId: string, invoiceId: string, note?: string) {
+  await paymentService.markReminderSentManually(reminderId, note)
+  revalidatePath("/payments")
+  revalidatePath(`/payments/${invoiceId}`)
+  revalidatePath("/students")
+  return { ok: true }
+}
+
+export async function getReminderMessagePreviewAction(invoiceId: string, reminderNumber?: number) {
+  const result = await paymentService.getReminderMessagePreview(invoiceId, reminderNumber)
+  return result
+}
+
+export async function sendConfirmationAction(invoiceId: string) {
+  const result = await paymentService.sendPaymentConfirmationManual(invoiceId)
+  revalidatePath(`/payments/${invoiceId}`)
+  return result
+}
+
+export async function reconcileMidtransAction(invoiceId: string) {
+  const result = await paymentService.reconcileInvoiceFromMidtrans(invoiceId)
+  revalidatePath("/payments")
+  revalidatePath(`/payments/${invoiceId}`)
+  revalidatePath("/students")
+  return result
+}

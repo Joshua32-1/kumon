@@ -1,2 +1,3 @@
-export const DEFAULT_MONTHLY_FEE = 500_000 // IDR
 export const DEFAULT_REMINDER_DAYS = [1, 11, 21]
+
+export const BILLABLE_STUDENT_STATUSES = ["ACTIVE", "TEMPORARY_LEAVE"] as const

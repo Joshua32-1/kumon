@@ -5,42 +5,50 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 
+// Sequential Midtrans link creation for every billable student (200+ can exceed 60s)
+export const maxDuration = 300
+
 const bodySchema = z
   .object({
     month: z.number().int().min(1).max(12).optional(),
     year: z.number().int().min(2020).optional(),
-    amount: z.number().int().positive().optional(),
   })
   .optional()
 
-export async function POST(request: NextRequest) {
+async function handleGenerateInvoices(request: NextRequest) {
   if (!verifyCronAuth(request)) {
     return apiError("UNAUTHORIZED", "Unauthorized", 401)
   }
 
   try {
     let body: z.infer<typeof bodySchema> = undefined
-    try {
-      const raw = await request.json()
-      const parsed = bodySchema.safeParse(raw)
-      if (parsed.success) body = parsed.data
-    } catch {
-      // Empty body is fine — defaults to current month in WIB
+    if (request.method === "POST") {
+      try {
+        const raw = await request.json()
+        const parsed = bodySchema.safeParse(raw)
+        if (parsed.success) body = parsed.data
+      } catch {
+        // Empty body is fine — defaults to current month in WIB
+      }
     }
 
     const defaults = currentMonthYearInCenterTimezone()
     const month = body?.month ?? defaults.month
     const year = body?.year ?? defaults.year
 
-    const result = await paymentService.generateMonthlyAutomated({
-      month,
-      year,
-      amount: body?.amount,
-    })
+    const result = await paymentService.generateMonthlyAutomated({ month, year })
 
     return apiSuccess(result, result.generated > 0 ? 201 : 200)
   } catch (err) {
     if (err instanceof AppError) return apiError(err.code, err.message, err.statusCode)
     return apiError("INTERNAL_ERROR", "Internal server error", 500)
   }
+}
+
+export async function GET(request: NextRequest) {
+  return handleGenerateInvoices(request)
+}
+
+export async function POST(request: NextRequest) {
+  return handleGenerateInvoices(request)
 }

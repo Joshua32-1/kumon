@@ -19,9 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Input } from "@/components/ui/input"
 import { generateMonthlyAction } from "../actions"
-import { getMonthName } from "@/lib/utils"
+import { getMonthName, currentMonthYearInCenterTimezone } from "@/lib/utils"
 
 interface GenerateInvoicesDialogProps {
   open: boolean
@@ -30,26 +29,21 @@ interface GenerateInvoicesDialogProps {
 }
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1)
-const currentYear = new Date().getFullYear()
-const YEARS = [currentYear - 1, currentYear, currentYear + 1]
+const { month: defaultMonth, year: defaultYear } = currentMonthYearInCenterTimezone()
+const YEARS = [defaultYear - 1, defaultYear, defaultYear + 1]
 
 export function GenerateInvoicesDialog({
   open,
   onOpenChange,
   onGenerated,
 }: GenerateInvoicesDialogProps) {
-  const [month, setMonth] = useState(new Date().getMonth() + 1)
-  const [year, setYear] = useState(currentYear)
-  const [amountOverride, setAmountOverride] = useState("")
+  const [month, setMonth] = useState(defaultMonth)
+  const [year, setYear] = useState(defaultYear)
   const [isLoading, setIsLoading] = useState(false)
 
   async function handleGenerate() {
     setIsLoading(true)
-    const result = await generateMonthlyAction({
-      month,
-      year,
-      amount: amountOverride ? Number(amountOverride) : undefined,
-    })
+    const result = await generateMonthlyAction({ month, year })
     setIsLoading(false)
 
     if ("error" in result && result.error) {
@@ -62,8 +56,12 @@ export function GenerateInvoicesDialog({
       r?.payment_links_created != null
         ? ` ${r.payment_links_created} link Midtrans dibuat.`
         : ""
+    const noSubjectsMsg =
+      r?.skipped_no_subjects ? ` ${r.skipped_no_subjects} siswa belum ada mata pelajaran.` : ""
+    const overdueMsg =
+      r?.marked_overdue ? ` ${r.marked_overdue} tagihan lama ditandai terlambat.` : ""
     toast.success(
-      `${r?.generated} tagihan dibuat. ${r?.skipped_on_leave} cuti, ${r?.skipped_existing} sudah ada.${linksMsg}`
+      `${r?.generated} tagihan dibuat. ${r?.skipped_on_leave} cuti, ${r?.skipped_existing} sudah ada.${noSubjectsMsg}${overdueMsg}${linksMsg}`
     )
     onOpenChange(false)
     onGenerated?.()
@@ -76,51 +74,40 @@ export function GenerateInvoicesDialog({
           <DialogTitle>Buat Tagihan Bulanan</DialogTitle>
           <DialogDescription>
             Tagihan akan dibuat untuk semua siswa aktif yang tidak sedang cuti.
+            Jumlah dihitung otomatis berdasarkan mata pelajaran dan tingkat sekolah.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Bulan</Label>
-              <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MONTHS.map((m) => (
-                    <SelectItem key={m} value={String(m)}>
-                      {getMonthName(m)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Tahun</Label>
-              <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {YEARS.map((y) => (
-                    <SelectItem key={y} value={String(y)}>
-                      {y}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
+        <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label>Jumlah SPP (opsional)</Label>
-            <Input
-              type="number"
-              placeholder="Kosongkan untuk pakai pengaturan default"
-              value={amountOverride}
-              onChange={(e) => setAmountOverride(e.target.value)}
-            />
+            <Label>Bulan</Label>
+            <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTHS.map((m) => (
+                  <SelectItem key={m} value={String(m)}>
+                    {getMonthName(m)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Tahun</Label>
+            <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {YEARS.map((y) => (
+                  <SelectItem key={y} value={String(y)}>
+                    {y}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 

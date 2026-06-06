@@ -1,12 +1,36 @@
 {
   "crons": [
     {
+      "path": "/api/cron/promote-grades",
+      "schedule": "0 17 30 6 *"
+    },
+    {
       "path": "/api/cron/generate-invoices",
       "schedule": "0 0 1 * *"
     },
     {
       "path": "/api/cron/send-reminders",
-      "schedule": "0 2 1,11,21 * *"
+      "schedule": "0 2 1,11,21 * *",
+      "description": "Slot 1 — 09:00 WIB: up to 100 current-month reminders (Phase 1)"
+    },
+    {
+      "path": "/api/cron/send-reminders",
+      "schedule": "30 2 1,11,21 * *",
+      "description": "Slot 2 — 09:30 WIB: up to 100 current-month reminders (Phase 1 remainder)"
+    },
+    {
+      "path": "/api/cron/send-reminders",
+      "schedule": "0 3 1,11,21 * *",
+      "description": "Slot 3 — 10:00 WIB: up to 100 (Phase 1 leftover + start overdue chase)"
+    },
+    {
+      "path": "/api/cron/send-reminders",
+      "schedule": "30 3 1,11,21 * *",
+      "description": "Slot 4 — 10:30 WIB: up to 100 (Phase 2 overdue backlog)"
+    },
+    {
+      "path": "/api/cron/reconcile-payments",
+      "schedule": "0 15 * * *"
     }
   ]
 }

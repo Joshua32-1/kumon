@@ -3,7 +3,9 @@
 import { useRouter } from "next/navigation"
 import { DataTable, type Column } from "@/components/shared/DataTable"
 import { PaymentStatusBadge } from "./PaymentStatusBadge"
+import { StatusBadge } from "@/components/shared/StatusBadge"
 import { formatRupiah, getMonthName } from "@/lib/utils"
+import { getBillingSummary } from "@/features/payments/billing-summary"
 import type { InvoiceWithStudent } from "../types"
 
 const columns: Column<InvoiceWithStudent>[] = [
@@ -27,8 +29,41 @@ const columns: Column<InvoiceWithStudent>[] = [
   },
   {
     key: "status",
-    header: "Status",
+    header: "Pembayaran",
     cell: (row) => <PaymentStatusBadge status={row.status} />,
+  },
+  {
+    key: "midtrans_link",
+    header: "Link Midtrans",
+    cell: (row) =>
+      row.midtrans_payment_url ? (
+        <span className="text-xs text-green-700 font-medium">Ada</span>
+      ) : (
+        <span className="text-xs text-muted-foreground">Belum</span>
+      ),
+  },
+  {
+    key: "wa_status",
+    header: "Link WA",
+    cell: (row) => {
+      const summary = getBillingSummary(row, row.payment_reminders ?? [])
+      if (summary.whatsappStatus === "not_applicable") return <span className="text-muted-foreground text-xs">—</span>
+      return <StatusBadge status={summary.whatsappStatus} />
+    },
+  },
+  {
+    key: "attention",
+    header: "Tindakan",
+    cell: (row) => {
+      const summary = getBillingSummary(row, row.payment_reminders ?? [])
+      if (summary.attentionReason === "delivery") {
+        return <StatusBadge status="attention_delivery" />
+      }
+      if (summary.attentionReason === "collection") {
+        return <StatusBadge status="attention_collection" />
+      }
+      return null
+    },
   },
   {
     key: "due_date",

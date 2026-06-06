@@ -6,14 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { SUBJECT_LABELS, SCHOOL_LEVEL_LABELS, ALL_SUBJECTS, parseSubjectFees } from "@/lib/billing/fees"
+import type { KumonSubject } from "@/lib/billing/fees"
 
 interface SettingsFormProps {
   initialConfig: Record<string, unknown>
-}
-
-function getNum(config: Record<string, unknown>, key: string, field: string): number {
-  const val = config[key] as Record<string, number> | undefined
-  return val?.[field] ?? 0
 }
 
 function getStr(config: Record<string, unknown>, key: string, field: string): string {
@@ -21,16 +18,34 @@ function getStr(config: Record<string, unknown>, key: string, field: string): st
   return val?.[field] ?? ""
 }
 
+function getNum(config: Record<string, unknown>, key: string, field: string): number {
+  const val = config[key] as Record<string, number> | undefined
+  return val?.[field] ?? 0
+}
+
 export function SettingsForm({ initialConfig }: SettingsFormProps) {
   const [centerName, setCenterName] = useState(
     getStr(initialConfig, "center_name", "name")
   )
-  const [monthlyFee, setMonthlyFee] = useState(
-    String(getNum(initialConfig, "monthly_fee", "amount"))
-  )
   const [maxLeaveMonths, setMaxLeaveMonths] = useState(
     String(getNum(initialConfig, "max_leave_months", "months"))
   )
+
+  // Subject fees — 2 tiers × 3 subjects
+  const parsedFees = parseSubjectFees(
+    (initialConfig["subject_fees"] as Record<string, unknown>) ?? {}
+  )
+  const [elementaryFees, setElementaryFees] = useState<Record<Lowercase<KumonSubject>, string>>({
+    english: String(parsedFees.elementary.english),
+    indonesian: String(parsedFees.elementary.indonesian),
+    mathematics: String(parsedFees.elementary.mathematics),
+  })
+  const [secondaryFees, setSecondaryFees] = useState<Record<Lowercase<KumonSubject>, string>>({
+    english: String(parsedFees.secondary.english),
+    indonesian: String(parsedFees.secondary.indonesian),
+    mathematics: String(parsedFees.secondary.mathematics),
+  })
+
   const [isLoading, setIsLoading] = useState(false)
 
   async function handleSave() {
@@ -38,7 +53,21 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
 
     const updates = [
       { key: "center_name", value: { name: centerName } },
-      { key: "monthly_fee", value: { amount: Number(monthlyFee) } },
+      {
+        key: "subject_fees",
+        value: {
+          elementary: {
+            english: Number(elementaryFees.english),
+            indonesian: Number(elementaryFees.indonesian),
+            mathematics: Number(elementaryFees.mathematics),
+          },
+          secondary: {
+            english: Number(secondaryFees.english),
+            indonesian: Number(secondaryFees.indonesian),
+            mathematics: Number(secondaryFees.mathematics),
+          },
+        },
+      },
       { key: "max_leave_months", value: { months: Number(maxLeaveMonths) } },
     ]
 
@@ -58,7 +87,7 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
   }
 
   return (
-    <div className="max-w-lg space-y-4">
+    <div className="max-w-2xl space-y-4">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Informasi Center</CardTitle>
@@ -77,17 +106,63 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Pembayaran</CardTitle>
+          <CardTitle className="text-base">Biaya SPP per Mata Pelajaran</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="monthly_fee">SPP Bulanan (IDR)</Label>
-            <Input
-              id="monthly_fee"
-              type="number"
-              value={monthlyFee}
-              onChange={(e) => setMonthlyFee(e.target.value)}
-            />
+          <p className="text-muted-foreground text-xs">
+            Perubahan harga berlaku untuk tagihan baru. Tagihan yang sudah dibuat tidak berubah.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr>
+                  <th className="text-muted-foreground py-2 pr-4 text-left font-medium">Tingkat</th>
+                  {ALL_SUBJECTS.map((s) => (
+                    <th key={s} className="text-muted-foreground py-2 px-2 text-left font-medium">
+                      {SUBJECT_LABELS[s]}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                <tr>
+                  <td className="py-2 pr-4 font-medium">{SCHOOL_LEVEL_LABELS.ELEMENTARY}</td>
+                  {ALL_SUBJECTS.map((s) => {
+                    const key = s.toLowerCase() as Lowercase<KumonSubject>
+                    return (
+                      <td key={s} className="py-2 px-2">
+                        <Input
+                          type="number"
+                          className="w-32"
+                          value={elementaryFees[key]}
+                          onChange={(e) =>
+                            setElementaryFees((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                        />
+                      </td>
+                    )
+                  })}
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4 font-medium">{SCHOOL_LEVEL_LABELS.SECONDARY}</td>
+                  {ALL_SUBJECTS.map((s) => {
+                    const key = s.toLowerCase() as Lowercase<KumonSubject>
+                    return (
+                      <td key={s} className="py-2 px-2">
+                        <Input
+                          type="number"
+                          className="w-32"
+                          value={secondaryFees[key]}
+                          onChange={(e) =>
+                            setSecondaryFees((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                        />
+                      </td>
+                    )
+                  })}
+                </tr>
+              </tbody>
+            </table>
           </div>
         </CardContent>
       </Card>

@@ -1,7 +1,32 @@
 import { formatRupiah, getMonthName } from "@/lib/utils"
+import {
+  formatPaymentDetailsForWhatsApp,
+  formatStudentEnrollmentForWhatsApp,
+  type InvoiceLineItem,
+  type SchoolLevel,
+} from "@/lib/billing/fees"
 import type { MessagingProvider, MessageResult } from "./types"
 import type { Invoice } from "@/features/payments/types"
 import type { Contact } from "@/features/students/types"
+
+type LineItemInput = Pick<InvoiceLineItem, "label" | "unit_amount">
+
+export interface PaymentWhatsAppContext {
+  studentName: string
+  schoolLevel: SchoolLevel
+}
+
+function normalizeLineItems(
+  items: Array<Partial<LineItemInput> & { label?: string; unit_amount?: number }>
+): LineItemInput[] {
+  return items
+    .filter((i) => i.label != null && i.unit_amount != null)
+    .map((i) => ({ label: i.label!, unit_amount: i.unit_amount! }))
+}
+
+function subjectLabelsFromLineItems(lineItems: LineItemInput[]): string[] {
+  return lineItems.map((l) => l.label)
+}
 
 // ── Providers ─────────────────────────────────────────────────────────────
 
@@ -43,6 +68,87 @@ function getProvider(): MessagingProvider {
   throw new Error(`Unknown WhatsApp provider: ${provider}`)
 }
 
+// ── Message templates ──────────────────────────────────────────────────────
+
+export function buildPaymentReminderMessage(params: {
+  contactName: string
+  studentName: string
+  schoolLevel: SchoolLevel
+  invoice: Invoice
+  reminderNumber: number
+  paymentUrl: string
+  lineItems: Array<Partial<LineItemInput>>
+}): string {
+  const { contactName, studentName, schoolLevel, invoice, reminderNumber, paymentUrl, lineItems } =
+    params
+  const normalized = normalizeLineItems(lineItems)
+  const monthName = getMonthName(invoice.month)
+  const total = formatRupiah(invoice.amount)
+  const ordinal = ["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`
+  const dueDate = new Date(invoice.due_date).toLocaleDateString("id-ID", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  })
+
+  const enrollment = formatStudentEnrollmentForWhatsApp(
+    studentName,
+    schoolLevel,
+    subjectLabelsFromLineItems(normalized)
+  )
+  const details = formatPaymentDetailsForWhatsApp(
+    monthName,
+    invoice.year,
+    normalized,
+    total,
+    "belum kami terima"
+  )
+
+  return (
+    `Halo Bapak/Ibu ${contactName},\n\n` +
+    `Ini adalah pengingat ${ordinal} pembayaran untuk siswa ${studentName}:\n\n` +
+    `${enrollment}\n\n` +
+    `${details}\n\n` +
+    `Jatuh tempo: ${dueDate}.\n\n` +
+    `Silakan bayar melalui link berikut:\n${paymentUrl}\n\n` +
+    `Terima kasih 🙏`
+  )
+}
+
+export function buildPaymentConfirmationMessage(params: {
+  contactName: string
+  studentName: string
+  schoolLevel: SchoolLevel
+  invoice: Invoice
+  lineItems: Array<Partial<LineItemInput>>
+}): string {
+  const { contactName, studentName, schoolLevel, invoice, lineItems } = params
+  const normalized = normalizeLineItems(lineItems)
+  const monthName = getMonthName(invoice.month)
+  const total = formatRupiah(invoice.amount)
+
+  const enrollment = formatStudentEnrollmentForWhatsApp(
+    studentName,
+    schoolLevel,
+    subjectLabelsFromLineItems(normalized)
+  )
+  const details = formatPaymentDetailsForWhatsApp(
+    monthName,
+    invoice.year,
+    normalized,
+    total,
+    "telah kami terima"
+  )
+
+  return (
+    `Halo Bapak/Ibu ${contactName},\n\n` +
+    `Pembayaran untuk siswa ${studentName}:\n\n` +
+    `${enrollment}\n\n` +
+    `${details}\n\n` +
+    `Terima kasih 🙏`
+  )
+}
+
 // ── Service ────────────────────────────────────────────────────────────────
 
 export const messagingService = {
@@ -54,36 +160,35 @@ export const messagingService = {
     invoice: Invoice,
     contact: Contact,
     reminderNumber: number,
-    paymentUrl: string
+    paymentUrl: string,
+    lineItems: Array<Partial<LineItemInput>> = [],
+    context: PaymentWhatsAppContext
   ): Promise<MessageResult> {
-    const monthName = getMonthName(invoice.month)
-    const amount = formatRupiah(invoice.amount)
-    const ordinal = ["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`
-    const dueDate = new Date(invoice.due_date).toLocaleDateString("id-ID", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
+    const message = buildPaymentReminderMessage({
+      contactName: contact.full_name,
+      studentName: context.studentName,
+      schoolLevel: context.schoolLevel,
+      invoice,
+      reminderNumber,
+      paymentUrl,
+      lineItems,
     })
-    const message =
-      `Halo Bapak/Ibu ${contact.full_name},\n\n` +
-      `Ini adalah pengingat ${ordinal} pembayaran SPP Kumon bulan ${monthName} ${invoice.year} ` +
-      `sebesar *${amount}* yang belum kami terima.\n` +
-      `Jatuh tempo: ${dueDate}.\n\n` +
-      `Silakan bayar melalui link berikut:\n${paymentUrl}\n\n` +
-      `Terima kasih 🙏`
     return this.send(contact.whatsapp_number, message)
   },
 
   async sendPaymentConfirmation(
     invoice: Invoice,
-    contact: Contact
+    contact: Contact,
+    lineItems: Array<Partial<LineItemInput>> = [],
+    context: PaymentWhatsAppContext
   ): Promise<MessageResult> {
-    const monthName = getMonthName(invoice.month)
-    const amount = formatRupiah(invoice.amount)
-    const message =
-      `Halo Bapak/Ibu ${contact.full_name},\n\n` +
-      `Pembayaran SPP Kumon bulan ${monthName} ${invoice.year} ` +
-      `sebesar *${amount}* telah kami terima. Terima kasih 🙏`
+    const message = buildPaymentConfirmationMessage({
+      contactName: contact.full_name,
+      studentName: context.studentName,
+      schoolLevel: context.schoolLevel,
+      invoice,
+      lineItems,
+    })
     return this.send(contact.whatsapp_number, message)
   },
 }

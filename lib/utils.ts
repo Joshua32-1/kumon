@@ -70,3 +70,24 @@ export function currentMonthYearInCenterTimezone(date = new Date()) {
 export function toDateString(year: number, month: number, day: number): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
 }
+
+/** Day of month (1–31) from an ISO date string in center context (YYYY-MM-DD). */
+export function dayOfMonthFromDateString(isoDate: string): number {
+  return Number(isoDate.slice(8, 10))
+}
+
+export function monthYearFromDateString(isoDate: string): { month: number; year: number } {
+  return { year: Number(isoDate.slice(0, 4)), month: Number(isoDate.slice(5, 7)) }
+}
+
+export function isPriorBillingPeriod(
+  invoiceMonth: number,
+  invoiceYear: number,
+  currentMonth: number,
+  currentYear: number
+): boolean {
+  return (
+    invoiceYear < currentYear ||
+    (invoiceYear === currentYear && invoiceMonth < currentMonth)
+  )
+}

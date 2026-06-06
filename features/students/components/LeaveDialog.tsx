@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { toast } from "sonner"
+import Link from "next/link"
 import {
   Dialog,
   DialogContent,
@@ -21,7 +22,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { setLeaveAction } from "../actions"
-import { getMonthName } from "@/lib/utils"
+import { getMonthName, currentMonthYearInCenterTimezone, formatRupiah } from "@/lib/utils"
 
 interface LeaveDialogProps {
   studentId: string
@@ -30,14 +31,34 @@ interface LeaveDialogProps {
 }
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1)
-const currentYear = new Date().getFullYear()
-const YEARS = [currentYear - 1, currentYear, currentYear + 1]
+const { month: defaultMonth, year: defaultYear } = currentMonthYearInCenterTimezone()
+const YEARS = [defaultYear - 1, defaultYear, defaultYear + 1]
+
+type UnpaidInvoice = { id: string; amount: number; status: string }
 
 export function LeaveDialog({ studentId, open, onOpenChange }: LeaveDialogProps) {
-  const [month, setMonth] = useState<number>(new Date().getMonth() + 1)
-  const [year, setYear] = useState<number>(currentYear)
+  const [month, setMonth] = useState<number>(defaultMonth)
+  const [year, setYear] = useState<number>(defaultYear)
   const [reason, setReason] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [existingInvoice, setExistingInvoice] = useState<UnpaidInvoice | null>(null)
+
+  // Fetch invoice for selected month/year whenever either changes (and dialog is open)
+  useEffect(() => {
+    if (!open) return
+    setExistingInvoice(null)
+
+    fetch(`/api/payments?student_id=${studentId}&month=${month}&year=${year}`)
+      .then((r) => r.json())
+      .then((r) => {
+        const invoices: UnpaidInvoice[] = r.data ?? []
+        const unpaid = invoices.find(
+          (inv) => inv.status === "PENDING" || inv.status === "OVERDUE"
+        )
+        setExistingInvoice(unpaid ?? null)
+      })
+      .catch(() => setExistingInvoice(null))
+  }, [open, studentId, month, year])
 
   async function handleSubmit() {
     setIsLoading(true)
@@ -102,6 +123,24 @@ export function LeaveDialog({ studentId, open, onOpenChange }: LeaveDialogProps)
               </Select>
             </div>
           </div>
+
+          {existingInvoice && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 space-y-1">
+              <p className="font-medium">
+                Tagihan {getMonthName(month)} {year} ({formatRupiah(existingInvoice.amount)}) masih belum lunas.
+              </p>
+              <p>
+                Setelah cuti dicatat, bebaskan atau batalkan tagihan secara manual.{" "}
+                <Link
+                  href={`/payments/${existingInvoice.id}`}
+                  className="underline hover:text-amber-900"
+                  onClick={() => onOpenChange(false)}
+                >
+                  Lihat tagihan
+                </Link>
+              </p>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label>Alasan (opsional)</Label>
