@@ -65,7 +65,6 @@ export async function regenerateInvoiceAction(invoiceId: string) {
 export async function sendReminderNowAction(invoiceId: string, reminderId?: string) {
   const result = await paymentService.sendPaymentReminderForInvoice(invoiceId, {
     reminderId,
-    ignoreSchedule: true,
     initiatedBy: "admin",
   })
   revalidatePath("/payments")
@@ -75,11 +74,13 @@ export async function sendReminderNowAction(invoiceId: string, reminderId?: stri
 }
 
 export async function markReminderSentManuallyAction(reminderId: string, invoiceId: string, note?: string) {
-  await paymentService.markReminderSentManually(reminderId, note)
-  revalidatePath("/payments")
-  revalidatePath(`/payments/${invoiceId}`)
-  revalidatePath("/students")
-  return { ok: true }
+  const result = await paymentService.markReminderSentManually(reminderId, note)
+  if (result.ok) {
+    revalidatePath("/payments")
+    revalidatePath(`/payments/${invoiceId}`)
+    revalidatePath("/students")
+  }
+  return result
 }
 
 export async function getReminderMessagePreviewAction(invoiceId: string, reminderNumber?: number) {

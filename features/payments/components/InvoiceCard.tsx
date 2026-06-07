@@ -110,11 +110,15 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
 
   async function handleMarkManualSent(reminderId: string) {
     setIsProcessing(true)
-    await markReminderSentManuallyAction(reminderId, invoice.id)
+    const result = await markReminderSentManuallyAction(reminderId, invoice.id)
     setIsProcessing(false)
     setMarkManualReminderId(null)
-    toast.success("Pengingat ditandai terkirim secara manual.")
-    onUpdate?.()
+    if (result.ok) {
+      toast.success("Pengingat ditandai terkirim secara manual.")
+      onUpdate?.()
+    } else {
+      toast.error(result.error ?? "Gagal menandai pengingat.")
+    }
   }
 
   async function handleCopyMessage() {
@@ -287,6 +291,12 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
 
                     {r.status === "FAILED" && r.message_preview && (
                       <p className="truncate text-xs text-[var(--danger)]" title={r.message_preview}>
+                        {r.message_preview}
+                      </p>
+                    )}
+
+                    {r.status === "CANCELLED" && r.message_preview && (
+                      <p className="truncate text-xs text-muted-foreground" title={r.message_preview}>
                         {r.message_preview}
                       </p>
                     )}

@@ -3,7 +3,7 @@ import type { Invoice, PaymentReminder } from "./types"
 export type WhatsAppDeliveryStatus =
   | "not_applicable"  // no invoice (cuti / inactive / no subjects generated)
   | "no_link"         // invoice exists, no midtrans_payment_url
-  | "link_not_sent"   // link exists, zero SENT reminders
+  | "link_not_sent"   // link exists, zero SENT reminders (and no delivery failures)
   | "sent"            // at least one SENT reminder
   | "send_failed"     // at least one FAILED, none SENT
   | "partial_failed"  // mix of SENT and FAILED

@@ -223,6 +223,22 @@ async function withMidtransRetry<T>(
   throw lastErr
 }
 
+async function cancelPendingReminders(
+  invoiceId: string,
+  reason: string,
+  supabase: SupabaseClient | typeof supabaseAdmin
+): Promise<void> {
+  const { error } = await supabase
+    .from("payment_reminders")
+    .update({
+      status: "CANCELLED",
+      message_preview: reason.slice(0, 200),
+    })
+    .eq("invoice_id", invoiceId)
+    .eq("status", "PENDING")
+  assertSupabaseOk(error, "payment reminders")
+}
+
 async function applyMidtransSettlement(
   invoice: Invoice,
   payload: MidtransSettlementInput
@@ -264,12 +280,7 @@ async function applyMidtransSettlement(
       .eq("id", invoice.id)
     assertSupabaseOk(invoiceError, "invoice")
 
-    const { error: reminderError } = await supabaseAdmin
-      .from("payment_reminders")
-      .update({ status: "FAILED" })
-      .eq("invoice_id", invoice.id)
-      .eq("status", "PENDING")
-    assertSupabaseOk(reminderError, "payment reminders")
+    await cancelPendingReminders(invoice.id, "Tagihan sudah lunas", supabaseAdmin)
 
     return { handled: true, status: "PAID_OLD_LINK", sendConfirmation: false, invoiceId: invoice.id }
   }
@@ -281,12 +292,7 @@ async function applyMidtransSettlement(
       .eq("id", invoice.id)
     assertSupabaseOk(invoiceError, "invoice")
 
-    const { error: reminderError } = await supabaseAdmin
-      .from("payment_reminders")
-      .update({ status: "FAILED" })
-      .eq("invoice_id", invoice.id)
-      .eq("status", "PENDING")
-    assertSupabaseOk(reminderError, "payment reminders")
+    await cancelPendingReminders(invoice.id, "Tagihan sudah lunas", supabaseAdmin)
 
     return {
       handled: true,
@@ -343,7 +349,7 @@ async function ensureOverdueCatchUpReminder(
   await supabaseAdmin
     .from("payment_reminders")
     .update({
-      status: "FAILED",
+      status: "CANCELLED",
       message_preview: "Digantikan pengingat tunggakan",
     })
     .eq("invoice_id", invoiceId)
@@ -1012,6 +1018,8 @@ export const paymentService = {
     // Resolve which reminder row to update
     let targetReminder: PaymentReminder | null = null
 
+    const today = todayInCenterTimezone()
+
     if (reminderId) {
       const { data: r } = await supabaseAdmin
         .from("payment_reminders")
@@ -1020,9 +1028,15 @@ export const paymentService = {
         .eq("invoice_id", invoiceId)
         .single()
       targetReminder = (r as PaymentReminder) ?? null
+      if (
+        targetReminder &&
+        targetReminder.scheduled_date > today &&
+        targetReminder.status !== "SENT"
+      ) {
+        return { ok: false, error: "Pengingat ini belum jatuh tempo" }
+      }
     } else {
       // Pick lowest-number FAILED or PENDING row; respect schedule unless overridden
-      const today = todayInCenterTimezone()
       let q = supabaseAdmin
         .from("payment_reminders")
         .select("*")
@@ -1053,7 +1067,7 @@ export const paymentService = {
     }
 
     if (!targetReminder) {
-      return { ok: false, error: "No eligible reminder row found" }
+      return { ok: false, error: "Tidak ada pengingat yang sudah jatuh tempo untuk dikirim" }
     }
 
     let paymentUrl: string
@@ -1253,7 +1267,23 @@ export const paymentService = {
   },
 
   /** Mark a reminder row as manually sent without going through Fonnte. */
-  async markReminderSentManually(reminderId: string, note?: string): Promise<void> {
+  async markReminderSentManually(
+    reminderId: string,
+    note?: string
+  ): Promise<{ ok: boolean; error?: string }> {
+    const { data: reminder } = await supabaseAdmin
+      .from("payment_reminders")
+      .select("scheduled_date, status")
+      .eq("id", reminderId)
+      .single()
+
+    if (!reminder) return { ok: false, error: "Pengingat tidak ditemukan" }
+
+    const today = todayInCenterTimezone()
+    if (reminder.scheduled_date > today && reminder.status !== "SENT") {
+      return { ok: false, error: "Pengingat ini belum jatuh tempo" }
+    }
+
     const label = note ? `Manual: ${note}` : "Manual: terkirim oleh admin"
     await supabaseAdmin
       .from("payment_reminders")
@@ -1263,6 +1293,7 @@ export const paymentService = {
         message_preview: label.slice(0, 200),
       })
       .eq("id", reminderId)
+    return { ok: true }
   },
 
   /** Build the WA reminder message text for copy-paste without sending. */
@@ -1540,11 +1571,7 @@ export const paymentService = {
 
     if (error || !data) throw Errors.INVOICE_NOT_FOUND()
 
-    await supabase
-      .from("payment_reminders")
-      .update({ status: "FAILED" })
-      .eq("invoice_id", invoiceId)
-      .eq("status", "PENDING")
+    await cancelPendingReminders(invoiceId, "Tagihan sudah lunas", supabase)
 
     return data as Invoice
   },
@@ -1561,11 +1588,7 @@ export const paymentService = {
 
     if (error || !data) throw Errors.INVOICE_NOT_FOUND()
 
-    await supabase
-      .from("payment_reminders")
-      .update({ status: "FAILED" })
-      .eq("invoice_id", invoiceId)
-      .eq("status", "PENDING")
+    await cancelPendingReminders(invoiceId, "Tagihan dibebaskan", supabase)
 
     return data as Invoice
   },
@@ -1600,11 +1623,7 @@ export const paymentService = {
 
     if (error || !data) throw Errors.INVOICE_NOT_FOUND()
 
-    await supabase
-      .from("payment_reminders")
-      .update({ status: "FAILED" })
-      .eq("invoice_id", invoiceId)
-      .eq("status", "PENDING")
+    await cancelPendingReminders(invoiceId, "Tagihan dibatalkan", supabase)
 
     return data as Invoice
   },

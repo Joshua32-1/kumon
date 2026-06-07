@@ -2,10 +2,6 @@
 -- IDEMPOTENT ANNUAL GRADE PROMOTION
 -- ============================================================
 
-INSERT INTO system_config (key, value) VALUES
-  ('grade_promotion', '{"year": null}')
-ON CONFLICT (key) DO NOTHING;
-
 CREATE OR REPLACE FUNCTION promote_grades_annual(p_promotion_year INTEGER)
 RETURNS JSONB
 LANGUAGE plpgsql

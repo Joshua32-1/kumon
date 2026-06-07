@@ -1,4 +1,4 @@
-// Hand-maintained to match supabase/migrations/0001–0004.
+// Hand-maintained to match supabase/migrations/0001–0002.
 // Includes hand-authored enums, RPC return shapes, and fields not emitted by supabase gen types.
 // Regenerate baseline with: npx supabase gen types typescript --project-id <id> > types/database.ts
 // Then re-apply manual additions (StudentGrade, PAID_OLD_LINK, promote_grades_annual, etc.).
@@ -26,7 +26,7 @@ export type StudentGrade =
   | "SMA_1"
   | "SMA_2"
   | "SMA_3"
-export type ReminderStatus = "PENDING" | "SENT" | "FAILED"
+export type ReminderStatus = "PENDING" | "SENT" | "FAILED" | "CANCELLED"
 export type KumonSubject = "ENGLISH" | "INDONESIAN" | "MATHEMATICS"
 export type SchoolLevel = "ELEMENTARY" | "SECONDARY"
 

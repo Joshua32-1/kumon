@@ -17,9 +17,7 @@ Admin panel for managing students, monthly payments, WhatsApp reminders, and Mid
 1. Create a new project at [supabase.com](https://supabase.com).
 2. Run migrations **in order** (SQL editor or `npx supabase db push`):
    - `supabase/migrations/0001_initial_schema.sql`
-   - `supabase/migrations/0002_subject_billing.sql`
-   - `supabase/migrations/0003_student_grades.sql`
-   - `supabase/migrations/0004_grade_promotion_idempotent.sql`
+   - `supabase/migrations/0002_functions.sql`
 3. In the Supabase dashboard, create an admin user under **Authentication → Users**.
 4. Generate types after schema is live:
    ```
@@ -225,21 +223,21 @@ Deploy to Vercel. Set all environment variables in the Vercel project settings �
 
 Apply database migrations **before** (or at the same time as) deploying app code.
 
-- **`0002`** adds the `PAID_OLD_LINK` enum value (in its own migration so PostgreSQL can commit it before `0003` references it). **`0003`** adds the partial unique index on invoices. If the new app is live before `0002` runs, Midtrans webhooks for stale payment links will fail when trying to set `status = 'PAID_OLD_LINK'`.
-- **`0004`** adds the idempotent `promote_grades_annual` RPC used by the July grade-promotion cron. Without it, `/api/cron/promote-grades` fails at runtime.
+- **`0001`** creates the full schema (enums, tables, RLS, config seeds). Includes `PAID_OLD_LINK`, `reminder_status.CANCELLED`, subject billing, and the partial unique index on invoices.
+- **`0002`** adds the idempotent `promote_grades_annual` RPC used by the July grade-promotion cron. Without it, `/api/cron/promote-grades` fails at runtime.
 
-1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0004`.
-2. **Verify enum** — in the Supabase SQL editor, confirm `PAID_OLD_LINK` exists:
+1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0002`.
+2. **Verify enums** — in the Supabase SQL editor:
 
    ```sql
    SELECT e.enumlabel
    FROM pg_enum e
    JOIN pg_type t ON e.enumtypid = t.oid
-   WHERE t.typname = 'payment_status'
-   ORDER BY e.enumsortorder;
+   WHERE t.typname IN ('payment_status', 'reminder_status')
+   ORDER BY t.typname, e.enumsortorder;
    ```
 
-   Expected labels include `PAID_OLD_LINK` (along with `PENDING`, `PAID`, `OVERDUE`, `CANCELLED`, `WAIVED`).
+   Expected `payment_status` labels include `PAID_OLD_LINK`. Expected `reminder_status` labels include `CANCELLED`.
 
 3. **Verify grade promotion RPC** — confirm the function exists:
 
@@ -255,4 +253,4 @@ Apply database migrations **before** (or at the same time as) deploying app code
 
 5. **Smoke test** — open Dashboard → "Pembayaran Link Lama" card loads; Payments page filter "Lunas (link lama)" works.
 
-**Rollback note:** PostgreSQL enum values are append-only. If you roll back app code after `0003` has run, rows with `PAID_OLD_LINK` remain in the database and stale-link webhooks on the old app will not handle them correctly. Keep migrations and app deploys paired.
+**Rollback note:** Keep app deploys paired with the schema. Rolling back app code without rolling back the database can leave rows or enum values the old app does not understand.

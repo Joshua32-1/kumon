@@ -7,7 +7,7 @@ export type PaymentStatus =
   | "CANCELLED"
   | "WAIVED"
   | "PAID_OLD_LINK"
-export type ReminderStatus = "PENDING" | "SENT" | "FAILED"
+export type ReminderStatus = "PENDING" | "SENT" | "FAILED" | "CANCELLED"
 
 export interface Invoice {
   id: string
