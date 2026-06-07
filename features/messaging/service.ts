@@ -85,11 +85,6 @@ export function buildPaymentReminderMessage(params: {
   const monthName = getMonthName(invoice.month)
   const total = formatRupiah(invoice.amount)
   const ordinal = ["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`
-  const dueDate = new Date(invoice.due_date).toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  })
 
   const enrollment = formatStudentEnrollmentForWhatsApp(
     studentName,
@@ -109,7 +104,6 @@ export function buildPaymentReminderMessage(params: {
     `Ini adalah pengingat ${ordinal} pembayaran untuk siswa ${studentName}:\n\n` +
     `${enrollment}\n\n` +
     `${details}\n\n` +
-    `Jatuh tempo: ${dueDate}.\n\n` +
     `Silakan bayar melalui link berikut:\n${paymentUrl}\n\n` +
     `Terima kasih 🙏`
   )
