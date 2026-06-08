@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server"
 import { z } from "zod"
 import { studentService } from "@/features/students/service"
 import { verifyCronAuth } from "@/lib/auth/cron"
+import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { isGradePromotionMonth } from "@/lib/billing/grades"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { AppError, Errors } from "@/lib/errors"
@@ -16,6 +17,10 @@ const bodySchema = z
 async function handlePromoteGrades(request: NextRequest) {
   if (!verifyCronAuth(request)) {
     return apiError("UNAUTHORIZED", "Unauthorized", 401)
+  }
+
+  if (!(await isCronJobEnabled("promote_grades"))) {
+    return apiSuccess({ skipped: true, reason: "cron_disabled" })
   }
 
   try {

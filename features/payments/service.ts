@@ -55,7 +55,13 @@ import type {
   ReconcileInvoiceResult,
   ReconcileBatchResult,
   ReminderProcessResult,
+  PaymentLinkSendCandidatesResult,
+  SendPaymentLinksResult,
 } from "./types"
+import {
+  getWhatsAppDeliveryStatus,
+  type WhatsAppDeliveryStatus,
+} from "./billing-summary"
 import {
   DEFAULT_GENERATE_CATEGORIES,
   GENERATABLE_INVOICE_CATEGORIES,
@@ -1425,6 +1431,150 @@ export const paymentService = {
       )
       recordOutcome(outcome)
       if (result.processed < batchLimit) await sleep(delayMs)
+    }
+
+    return result
+  },
+
+  async listPaymentLinkSendCandidates(
+    month: number,
+    year: number
+  ): Promise<PaymentLinkSendCandidatesResult> {
+    const { data: rows, error } = await supabaseAdmin
+      .from("invoices")
+      .select(
+        "id, status, payment_access_token, students(full_name, status, contacts(whatsapp_number, is_primary)), payment_reminders(status)"
+      )
+      .eq("month", month)
+      .eq("year", year)
+      .in("status", ["PENDING", "OVERDUE"])
+
+    if (error) throw Errors.INTERNAL(error.message)
+
+    const SENDABLE: WhatsAppDeliveryStatus[] = [
+      "link_not_sent",
+      "send_failed",
+      "partial_failed",
+    ]
+
+    let eligible = 0
+    let already_sent = 0
+    let no_whatsapp = 0
+    let no_link = 0
+    const candidates: PaymentLinkSendCandidatesResult["candidates"] = []
+
+    for (const row of rows ?? []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const inv = row as any
+      const student = inv.students
+      const reminders = (inv.payment_reminders ?? []) as PaymentReminder[]
+
+      if (!inv.payment_access_token) {
+        no_link++
+        continue
+      }
+
+      const waStatus = getWhatsAppDeliveryStatus(inv as Invoice, reminders)
+      if (waStatus === "sent") {
+        already_sent++
+        continue
+      }
+
+      const contacts = (student?.contacts ?? []) as Contact[]
+      const primaryContact =
+        contacts.find((c: Contact) => c.is_primary) ?? contacts[0]
+      if (!primaryContact?.whatsapp_number) {
+        no_whatsapp++
+        continue
+      }
+
+      const studentStatus = student?.status as string | undefined
+      if (
+        !studentStatus ||
+        !(BILLABLE_STUDENT_STATUSES as readonly string[]).includes(studentStatus)
+      ) {
+        continue
+      }
+
+      if (!SENDABLE.includes(waStatus)) continue
+
+      eligible++
+      candidates.push({
+        invoice_id: inv.id as string,
+        student_name: (student?.full_name as string) ?? "—",
+      })
+    }
+
+    candidates.sort((a, b) => a.student_name.localeCompare(b.student_name, "id"))
+
+    return {
+      month,
+      year,
+      eligible,
+      already_sent,
+      no_whatsapp,
+      no_link,
+      candidates,
+    }
+  },
+
+  /**
+   * Manually send payment links via WhatsApp for all eligible invoices in a period.
+   * Reuses the same per-invoice logic as the reminder cron (`sendPaymentReminderForInvoice`).
+   */
+  async sendPaymentLinksForPeriod(
+    month: number,
+    year: number,
+    options?: { batchLimit?: number; delayMs?: number }
+  ): Promise<SendPaymentLinksResult> {
+    const batchLimit =
+      options?.batchLimit ?? Number(process.env.WHATSAPP_BATCH_LIMIT ?? 100)
+    const delayMs =
+      options?.delayMs ?? Number(process.env.WHATSAPP_SEND_DELAY_MS ?? 2000)
+
+    const { candidates } = await paymentService.listPaymentLinkSendCandidates(
+      month,
+      year
+    )
+
+    const result: SendPaymentLinksResult = {
+      month,
+      year,
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      truncated: false,
+    }
+
+    const recordOutcome = (outcome: { ok: boolean; error?: string }) => {
+      if (outcome.ok) {
+        result.sent++
+      } else {
+        const skip =
+          outcome.error?.startsWith("Invoice already") ||
+          outcome.error === "Student inactive" ||
+          outcome.error === "Tidak ada pengingat yang sudah jatuh tempo untuk dikirim"
+        if (skip) result.skipped++
+        else result.failed++
+      }
+    }
+
+    for (const candidate of candidates) {
+      if (result.processed >= batchLimit) {
+        result.truncated = true
+        break
+      }
+
+      result.processed++
+      const outcome = await paymentService.sendPaymentReminderForInvoice(
+        candidate.invoice_id,
+        { ignoreSchedule: true, initiatedBy: "admin" }
+      )
+      recordOutcome(outcome)
+      if (result.processed < batchLimit && result.processed < candidates.length) {
+        await sleep(delayMs)
+      }
     }
 
     return result

@@ -2,7 +2,11 @@
 
 import { revalidatePath } from "next/cache"
 import { paymentService } from "./service"
-import { generateMonthlySchema, generateCandidatesSchema } from "./validations"
+import {
+  generateMonthlySchema,
+  generateCandidatesSchema,
+  sendPaymentLinksSchema,
+} from "./validations"
 import type { GenerateMonthlyInput } from "./types"
 
 export async function generateMonthlyAction(input: GenerateMonthlyInput) {
@@ -100,4 +104,33 @@ export async function reconcileMidtransAction(invoiceId: string) {
   revalidatePath(`/payments/${invoiceId}`)
   revalidatePath("/students")
   return result
+}
+
+export async function listPaymentLinkSendCandidatesAction(input: {
+  month: number
+  year: number
+}) {
+  const parsed = sendPaymentLinksSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const result = await paymentService.listPaymentLinkSendCandidates(
+    parsed.data.month,
+    parsed.data.year
+  )
+  return { data: result }
+}
+
+export async function sendPaymentLinksAction(input: { month: number; year: number }) {
+  const parsed = sendPaymentLinksSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const result = await paymentService.sendPaymentLinksForPeriod(
+    parsed.data.month,
+    parsed.data.year
+  )
+  revalidatePath("/payments")
+  revalidatePath("/students")
+  return { data: result }
 }

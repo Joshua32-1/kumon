@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server"
 import { paymentService } from "@/features/payments/service"
 import { verifyCronAuth } from "@/lib/auth/cron"
+import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 
@@ -10,6 +11,10 @@ export const maxDuration = 120
 async function handleReconcilePayments(request: NextRequest) {
   if (!verifyCronAuth(request)) {
     return apiError("UNAUTHORIZED", "Unauthorized", 401)
+  }
+
+  if (!(await isCronJobEnabled("reconcile_payments"))) {
+    return apiSuccess({ skipped: true, reason: "cron_disabled" })
   }
 
   try {

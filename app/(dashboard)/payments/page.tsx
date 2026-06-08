@@ -8,7 +8,9 @@ import { FilterPill } from "@/components/shared/FilterPill"
 import { PeriodSelector } from "@/components/shared/PeriodSelector"
 import { PaymentTable } from "@/features/payments/components/PaymentTable"
 import { GenerateInvoicesDialog } from "@/features/payments/components/GenerateInvoicesDialog"
+import { SendPaymentLinksDialog } from "@/features/payments/components/SendPaymentLinksDialog"
 import { Button } from "@/components/ui/button"
+import { MessageCircle } from "lucide-react"
 import { getBillingSummary } from "@/features/payments/billing-summary"
 import { isArrearsInvoice } from "@/lib/billing/arrears"
 import { formatRupiah, currentMonthYearInCenterTimezone, todayInCenterTimezone } from "@/lib/utils"
@@ -63,6 +65,7 @@ export default function PaymentsPage() {
   const [month, setMonth] = useState(defaultMonth)
   const [year, setYear] = useState(defaultYear)
   const [generateOpen, setGenerateOpen] = useState(false)
+  const [sendLinksOpen, setSendLinksOpen] = useState(false)
 
   useEffect(() => {
     if (searchParams.get("view") === "arrears") setArrearsView(true)
@@ -126,7 +129,20 @@ export default function PaymentsPage() {
         title="Pembayaran"
         description={pageDescription}
         action={
-          <Button onClick={() => setGenerateOpen(true)}>Buat Tagihan Bulanan</Button>
+          <div className="flex items-center gap-2">
+            <Button onClick={() => setGenerateOpen(true)}>Buat Tagihan Bulanan</Button>
+            {!arrearsView && (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setSendLinksOpen(true)}
+                title="Kirim link pembayaran via WhatsApp"
+                aria-label="Kirim link pembayaran via WhatsApp"
+              >
+                <MessageCircle />
+              </Button>
+            )}
+          </div>
         }
       />
 
@@ -196,6 +212,14 @@ export default function PaymentsPage() {
         open={generateOpen}
         onOpenChange={setGenerateOpen}
         onGenerated={() => mutate()}
+      />
+
+      <SendPaymentLinksDialog
+        open={sendLinksOpen}
+        onOpenChange={setSendLinksOpen}
+        month={month}
+        year={year}
+        onSent={() => mutate()}
       />
     </>
   )

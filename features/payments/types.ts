@@ -141,6 +141,26 @@ export interface ReminderProcessResult {
   includeOverdueChase?: boolean
 }
 
+export interface PaymentLinkSendCandidate {
+  invoice_id: string
+  student_name: string
+}
+
+export interface PaymentLinkSendCandidatesResult {
+  month: number
+  year: number
+  eligible: number
+  already_sent: number
+  no_whatsapp: number
+  no_link: number
+  candidates: PaymentLinkSendCandidate[]
+}
+
+export interface SendPaymentLinksResult extends ReminderProcessResult {
+  month: number
+  year: number
+}
+
 export interface PaymentFilters {
   status?: PaymentStatus
   month?: number

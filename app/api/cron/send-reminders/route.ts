@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server"
 import { z } from "zod"
 import { paymentService } from "@/features/payments/service"
 import { verifyCronAuth } from "@/lib/auth/cron"
+import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError, todayInCenterTimezone, dayOfMonthFromDateString } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 import {
@@ -52,6 +53,10 @@ function slotOptions(slot: number): { includeOverdueChase: boolean } {
 async function handleSendReminders(request: NextRequest) {
   if (!verifyCronAuth(request)) {
     return apiError("UNAUTHORIZED", "Unauthorized", 401)
+  }
+
+  if (!(await isCronJobEnabled("send_reminders"))) {
+    return apiSuccess({ skipped: true, reason: "cron_disabled" })
   }
 
   try {

@@ -22,6 +22,8 @@ export const generateCandidatesSchema = z.object({
   year: z.number().int().min(2020).max(2100),
 })
 
+export const sendPaymentLinksSchema = generateCandidatesSchema
+
 export const updateInvoiceSchema = z.object({
   status: z.enum(["PENDING", "PAID", "OVERDUE", "CANCELLED", "WAIVED"]).optional(),
   notes: z.string().optional(),

@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server"
 import { z } from "zod"
 import { paymentService } from "@/features/payments/service"
 import { verifyCronAuth } from "@/lib/auth/cron"
+import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 
@@ -18,6 +19,10 @@ const bodySchema = z
 async function handleGenerateInvoices(request: NextRequest) {
   if (!verifyCronAuth(request)) {
     return apiError("UNAUTHORIZED", "Unauthorized", 401)
+  }
+
+  if (!(await isCronJobEnabled("generate_invoices"))) {
+    return apiSuccess({ skipped: true, reason: "cron_disabled" })
   }
 
   try {

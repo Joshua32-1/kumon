@@ -4,6 +4,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -17,6 +18,12 @@ import {
 } from "@/components/ui/table"
 import { SUBJECT_LABELS, SCHOOL_LEVEL_LABELS, ALL_SUBJECTS, parseSubjectFees } from "@/lib/billing/fees"
 import type { KumonSubject } from "@/lib/billing/fees"
+import {
+  CRON_JOBS,
+  parseCronJobsConfig,
+  serializeCronJobsConfig,
+  type CronJobId,
+} from "@/lib/cron/jobs"
 
 interface SettingsFormProps {
   initialConfig: Record<string, unknown>
@@ -54,6 +61,13 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
     mathematics: String(parsedFees.secondary.mathematics),
   })
 
+  const parsedCronJobs = parseCronJobsConfig(initialConfig["cron_jobs"])
+  const [cronJobsEnabled, setCronJobsEnabled] = useState<Record<CronJobId, boolean>>(
+    Object.fromEntries(
+      CRON_JOBS.map(({ id }) => [id, parsedCronJobs[id].enabled])
+    ) as Record<CronJobId, boolean>
+  )
+
   const [isLoading, setIsLoading] = useState(false)
 
   async function handleSave() {
@@ -77,6 +91,7 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
         },
       },
       { key: "max_leave_months", value: { months: Number(maxLeaveMonths) } },
+      { key: "cron_jobs", value: serializeCronJobsConfig(cronJobsEnabled) },
     ]
 
     const res = await fetch("/api/settings", {
@@ -194,6 +209,45 @@ export function SettingsForm({ initialConfig }: SettingsFormProps) {
               value={maxLeaveMonths}
               onChange={(e) => setMaxLeaveMonths(e.target.value)}
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Tugas Terjadwal (Cron)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Aktifkan atau nonaktifkan otomatisasi yang dijalankan oleh scheduler Vercel.
+            Tugas yang dinonaktifkan akan dilewati saat cron dipanggil.
+          </p>
+          <div className="space-y-4">
+            {CRON_JOBS.map((job) => (
+              <div
+                key={job.id}
+                className="flex items-start gap-3 rounded-lg border border-border p-4"
+              >
+                <Checkbox
+                  id={`cron_${job.id}`}
+                  checked={cronJobsEnabled[job.id]}
+                  onCheckedChange={(checked) =>
+                    setCronJobsEnabled((prev) => ({
+                      ...prev,
+                      [job.id]: checked === true,
+                    }))
+                  }
+                  className="mt-0.5"
+                />
+                <div className="space-y-1">
+                  <Label htmlFor={`cron_${job.id}`} className="cursor-pointer font-medium">
+                    {job.label}
+                  </Label>
+                  <p className="text-sm text-muted-foreground">{job.description}</p>
+                  <p className="text-xs text-muted-foreground">{job.schedule}</p>
+                </div>
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>

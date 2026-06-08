@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server"
 import { z } from "zod"
 import { paymentService } from "@/features/payments/service"
 import { verifyCronAuth } from "@/lib/auth/cron"
+import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 
@@ -19,6 +20,10 @@ const bodySchema = z
 async function handleBackfillPaymentLinks(request: NextRequest) {
   if (!verifyCronAuth(request)) {
     return apiError("UNAUTHORIZED", "Unauthorized", 401)
+  }
+
+  if (!(await isCronJobEnabled("backfill_payment_links"))) {
+    return apiSuccess({ skipped: true, reason: "cron_disabled" })
   }
 
   try {
