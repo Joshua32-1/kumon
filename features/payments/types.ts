@@ -22,6 +22,8 @@ export interface Invoice {
   midtrans_payment_url: string | null
   midtrans_transaction_id: string | null
   midtrans_order_ids: string[]
+  payment_access_token: string
+  midtrans_snap_created_at: string | null
   school_level_at_billing: SchoolLevel
   notes: string | null
   created_at: string
@@ -134,7 +136,7 @@ export interface ReminderProcessResult {
   sent: number
   failed: number
   skipped: number
-  slot?: 1 | 2 | 3 | 4
+  slot?: number
   truncated?: boolean
   includeOverdueChase?: boolean
 }

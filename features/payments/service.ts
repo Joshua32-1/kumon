@@ -6,6 +6,10 @@ import {
   invalidateMidtransOrder,
 } from "@/lib/midtrans/client"
 import {
+  buildPaymentLink,
+  generatePaymentAccessToken,
+} from "@/lib/payments/pay-link"
+import {
   messagingService,
   buildPaymentReminderMessage,
   type PaymentWhatsAppContext,
@@ -222,6 +226,60 @@ async function withMidtransRetry<T>(
   }
   throw lastErr
 }
+
+function getMidtransPageExpiryHours(): number {
+  return Number(process.env.MIDTRANS_PAGE_EXPIRY_HOURS ?? 24)
+}
+
+function isWithinSnapPageWindow(snapCreatedAt: string | null): boolean {
+  if (!snapCreatedAt) return false
+  const expiryMs = getMidtransPageExpiryHours() * 60 * 60 * 1000
+  return Date.now() - new Date(snapCreatedAt).getTime() < expiryMs
+}
+
+function parseMidtransExpiryTime(expiryTime: string): number {
+  if (expiryTime.includes("T")) return new Date(expiryTime).getTime()
+  return new Date(`${expiryTime.replace(" ", "T")}+07:00`).getTime()
+}
+
+function isExpiryTimeInFuture(expiryTime: string | undefined): boolean {
+  if (!expiryTime) return false
+  return parseMidtransExpiryTime(expiryTime) > Date.now()
+}
+
+async function isMidtransCheckoutReusable(
+  invoice: Pick<
+    Invoice,
+    "midtrans_order_id" | "midtrans_payment_url" | "midtrans_snap_created_at"
+  >
+): Promise<boolean> {
+  const { midtrans_order_id, midtrans_payment_url, midtrans_snap_created_at } = invoice
+  if (!midtrans_order_id || !midtrans_payment_url) return false
+
+  const status = await getMidtransTransactionStatus(midtrans_order_id)
+
+  if (!status) {
+    return isWithinSnapPageWindow(midtrans_snap_created_at)
+  }
+
+  if (
+    status.transaction_status === "expire" ||
+    status.transaction_status === "cancel"
+  ) {
+    return false
+  }
+
+  if (status.transaction_status === "pending") {
+    if (status.expiry_time && isExpiryTimeInFuture(status.expiry_time)) return true
+    return isWithinSnapPageWindow(midtrans_snap_created_at)
+  }
+
+  return false
+}
+
+export type PayPageOutcome =
+  | { kind: "redirect"; url: string }
+  | { kind: "message"; title: string; body: string }
 
 async function cancelPendingReminders(
   invoiceId: string,
@@ -530,7 +588,6 @@ export const paymentService = {
     return paymentService._generateMonthlyInternal(input, {
       supabase,
       createdBy: user?.id ?? null,
-      createPaymentLinks: true,
     })
   },
 
@@ -539,7 +596,6 @@ export const paymentService = {
     return paymentService._generateMonthlyInternal(input, {
       supabase: supabaseAdmin,
       createdBy: null,
-      createPaymentLinks: true,
     })
   },
 
@@ -548,10 +604,9 @@ export const paymentService = {
     options: {
       supabase: SupabaseClient | typeof supabaseAdmin
       createdBy: string | null
-      createPaymentLinks: boolean
     }
   ): Promise<GenerateResult> {
-    const { supabase, createdBy, createPaymentLinks } = options
+    const { supabase, createdBy } = options
     const { month, year, categories, student_ids } = input
     const allowedCategories = categories ?? DEFAULT_GENERATE_CATEGORIES
     const selectedStudentIds = student_ids ? new Set(student_ids) : null
@@ -620,6 +675,7 @@ export const paymentService = {
       due_date: string
       created_by: string | null
       school_level_at_billing: SchoolLevel
+      payment_access_token: string
       lines: Array<{ subject: KumonSubject; label: string; unit_amount: number }>
     }> = []
 
@@ -681,6 +737,7 @@ export const paymentService = {
         due_date: dueDate,
         created_by: createdBy,
         school_level_at_billing: schoolLevel,
+        payment_access_token: generatePaymentAccessToken(),
         lines,
       })
     }
@@ -735,11 +792,6 @@ export const paymentService = {
       )
     }
 
-    let linkResult: CheckoutLinksResult = { created: 0, failed: 0, failed_ids: [] }
-    if (createPaymentLinks) {
-      linkResult = await paymentService.createCheckoutLinksForInvoices(invoiceIds)
-    }
-
     return {
       generated: invoiceIds.length,
       skipped_on_leave: skippedOnLeave,
@@ -748,9 +800,9 @@ export const paymentService = {
       skipped_before_enrollment: skippedBeforeEnrollment,
       skipped_not_selected: skippedNotSelected,
       invoice_ids: invoiceIds,
-      payment_links_created: linkResult.created,
-      payment_links_failed: linkResult.failed,
-      payment_link_failed_ids: linkResult.failed_ids,
+      payment_links_created: invoiceIds.length,
+      payment_links_failed: 0,
+      payment_link_failed_ids: [],
       marked_overdue,
     }
   },
@@ -786,44 +838,155 @@ export const paymentService = {
     await db.from("payment_reminders").insert(reminders)
   },
 
-  async createCheckout(invoiceId: string): Promise<{ paymentUrl: string }> {
-    const supabase = await createSupabaseServerClient()
-    return paymentService._createCheckout(invoiceId, supabase)
-  },
-
-  async ensureCheckoutLink(invoiceId: string): Promise<string> {
+  async ensurePaymentAccessToken(invoiceId: string): Promise<string> {
     const { data: invoice } = await supabaseAdmin
       .from("invoices")
-      .select("midtrans_payment_url")
+      .select("payment_access_token")
       .eq("id", invoiceId)
       .single()
 
-    if (invoice?.midtrans_payment_url) return invoice.midtrans_payment_url
+    if (invoice?.payment_access_token) return invoice.payment_access_token
 
-    const { paymentUrl } = await paymentService._createCheckout(invoiceId, supabaseAdmin)
-    return paymentUrl
+    const token = generatePaymentAccessToken()
+    const { error } = await supabaseAdmin
+      .from("invoices")
+      .update({ payment_access_token: token })
+      .eq("id", invoiceId)
+
+    if (error) throw Errors.INTERNAL(`Failed to assign payment token: ${error.message}`)
+    return token
   },
 
-  async createCheckoutLinksForInvoices(
+  async getPaymentLink(invoiceId: string): Promise<string> {
+    const token = await paymentService.ensurePaymentAccessToken(invoiceId)
+    return buildPaymentLink(token)
+  },
+
+  async createCheckout(invoiceId: string): Promise<{ paymentUrl: string }> {
+    const paymentUrl = await paymentService.getPaymentLink(invoiceId)
+    return { paymentUrl }
+  },
+
+  async backfillPaymentTokensForInvoices(
     invoiceIds: string[]
   ): Promise<CheckoutLinksResult> {
-    const delayMs = Number(process.env.MIDTRANS_LINK_DELAY_MS ?? 500)
     let created = 0
     const failed_ids: string[] = []
 
-    for (let i = 0; i < invoiceIds.length; i++) {
-      const id = invoiceIds[i]
+    for (const id of invoiceIds) {
       try {
-        await paymentService.ensureCheckoutLink(id)
+        await paymentService.ensurePaymentAccessToken(id)
         created++
       } catch (err) {
-        console.error(`Failed to create checkout link for invoice ${id}:`, err)
+        console.error(`Failed to assign payment token for invoice ${id}:`, err)
         failed_ids.push(id)
       }
-      if (i < invoiceIds.length - 1) await sleep(delayMs)
     }
 
     return { created, failed: failed_ids.length, failed_ids }
+  },
+
+  async findInvoiceByPaymentToken(token: string): Promise<Invoice | null> {
+    const { data } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("payment_access_token", token)
+      .maybeSingle()
+
+    return data ? (data as Invoice) : null
+  },
+
+  async resolvePayPage(token: string): Promise<PayPageOutcome> {
+    const invoice = await paymentService.findInvoiceByPaymentToken(token)
+    if (!invoice) {
+      return {
+        kind: "message",
+        title: "Link tidak ditemukan",
+        body: "Link pembayaran tidak valid atau sudah tidak berlaku.",
+      }
+    }
+
+    if (invoice.status === "PAID" || invoice.status === "PAID_OLD_LINK") {
+      return {
+        kind: "message",
+        title: "Sudah lunas",
+        body: "Tagihan ini sudah dibayar. Terima kasih.",
+      }
+    }
+
+    if (invoice.status === "CANCELLED") {
+      return {
+        kind: "message",
+        title: "Tagihan dibatalkan",
+        body: "Tagihan ini telah dibatalkan. Hubungi pusat Kumon jika ada pertanyaan.",
+      }
+    }
+
+    if (invoice.status === "WAIVED") {
+      return {
+        kind: "message",
+        title: "Tagihan dibebaskan",
+        body: "Tagihan ini telah dibebaskan. Tidak perlu melakukan pembayaran.",
+      }
+    }
+
+    if (invoice.status !== "PENDING" && invoice.status !== "OVERDUE") {
+      return {
+        kind: "message",
+        title: "Tidak dapat membayar",
+        body: "Tagihan ini tidak dapat dibayar saat ini.",
+      }
+    }
+
+    const { data: student } = await supabaseAdmin
+      .from("students")
+      .select("status")
+      .eq("id", invoice.student_id)
+      .single()
+
+    const studentStatus = student?.status as string | undefined
+    if (
+      !studentStatus ||
+      !(BILLABLE_STUDENT_STATUSES as readonly string[]).includes(studentStatus)
+    ) {
+      return {
+        kind: "message",
+        title: "Tidak dapat membayar",
+        body: "Status siswa tidak aktif. Hubungi pusat Kumon untuk bantuan.",
+      }
+    }
+
+    const redirectUrl = await paymentService.resolveMidtransCheckout(invoice.id)
+    return { kind: "redirect", url: redirectUrl }
+  },
+
+  async resolveMidtransCheckout(invoiceId: string): Promise<string> {
+    const { data: invoice, error } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("id", invoiceId)
+      .single()
+
+    if (error || !invoice) throw Errors.INVOICE_NOT_FOUND()
+
+    const inv = invoice as Invoice
+    if (inv.status !== "PENDING" && inv.status !== "OVERDUE") {
+      throw Errors.BAD_REQUEST("Tagihan tidak dapat dibayar.")
+    }
+
+    if (await isMidtransCheckoutReusable(inv)) {
+      return inv.midtrans_payment_url!
+    }
+
+    if (inv.midtrans_order_id) {
+      const priorStatus = await getMidtransTransactionStatus(inv.midtrans_order_id)
+      if (priorStatus?.transaction_status === "pending") {
+        await invalidateMidtransOrder(inv.midtrans_order_id)
+      }
+    }
+
+    const { paymentUrl } = await paymentService._createCheckout(invoiceId, supabaseAdmin)
+    return paymentUrl
   },
 
   async _createCheckout(
@@ -851,6 +1014,8 @@ export const paymentService = {
         name: item.label,
       }))
 
+    const pageExpiryHours = getMidtransPageExpiryHours()
+
     const result = await withMidtransRetry(
       () =>
         snap.createTransaction({
@@ -862,10 +1027,16 @@ export const paymentService = {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             first_name: (invoice as any).students?.full_name ?? "Siswa",
           },
+          page_expiry: {
+            duration: pageExpiryHours,
+            unit: "hours",
+          },
           ...(lineItems.length > 0 ? { item_details: lineItems } : {}),
         }),
       `createTransaction for invoice ${invoiceId}`
     )
+
+    const snapCreatedAt = new Date().toISOString()
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const invRow = invoice as any
@@ -877,6 +1048,7 @@ export const paymentService = {
         midtrans_order_id: orderId,
         midtrans_payment_url: result.redirect_url,
         midtrans_order_ids: orderIds,
+        midtrans_snap_created_at: snapCreatedAt,
       })
       .eq("id", invoiceId)
 
@@ -964,10 +1136,12 @@ export const paymentService = {
         school_level_at_billing: schoolLevel,
         midtrans_payment_url: null,
         midtrans_order_id: null,
+        midtrans_snap_created_at: null,
       })
       .eq("id", invoiceId)
 
-    return paymentService._createCheckout(invoiceId, supabase)
+    const paymentUrl = await paymentService.getPaymentLink(invoiceId)
+    return { paymentUrl }
   },
 
   /**
@@ -1072,9 +1246,9 @@ export const paymentService = {
 
     let paymentUrl: string
     try {
-      paymentUrl = await paymentService.ensureCheckoutLink(invoiceId)
+      paymentUrl = await paymentService.getPaymentLink(invoiceId)
     } catch (err) {
-      const msg = `Failed to create payment link: ${String(err)}`
+      const msg = `Failed to build payment link: ${String(err)}`
       await paymentService._markReminderFailed(targetReminder.id, msg)
       return { ok: false, reminderId: targetReminder.id, error: msg }
     }
@@ -1109,9 +1283,9 @@ export const paymentService = {
   /**
    * Send WhatsApp reminders for the current slot.
    *
-   * Designed for a four-slot morning schedule on reminder days (1/11/21):
-   *   Slots 1-2 (09:00, 09:30): Phase 1 only  — current-month scheduled reminders
-   *   Slots 3-4 (10:00, 10:30): Phase 1 + Phase 2 — plus overdue/prior-month chase
+   * Designed for a ten-slot morning schedule on reminder days (1/11/21):
+   *   Slots 1-9 (09:00–13:00 WIB): Phase 1 only — current-month scheduled reminders
+   *   Slot 10 (13:30 WIB): Phase 1 + Phase 2 — plus overdue/prior-month chase
    *
    * Each slot sends at most `batchLimit` messages with `delayMs` between each.
    * Deduplication is automatic: Phase 1 rows become SENT; Phase 2 skips invoices
@@ -1123,7 +1297,7 @@ export const paymentService = {
       batchLimit?: number
       delayMs?: number
       includeOverdueChase?: boolean
-      slot?: 1 | 2 | 3 | 4
+      slot?: number
     }
   ): Promise<ReminderProcessResult> {
     const today = date ?? todayInCenterTimezone()
@@ -1322,7 +1496,7 @@ export const paymentService = {
 
     let paymentUrl: string
     try {
-      paymentUrl = await paymentService.ensureCheckoutLink(invoiceId)
+      paymentUrl = await paymentService.getPaymentLink(invoiceId)
     } catch {
       return null
     }
@@ -1491,7 +1665,7 @@ export const paymentService = {
     return { ok: true, synced: false, message: "Belum ada pembayaran di Midtrans." }
   },
 
-  /** Create Midtrans links for unpaid invoices that are missing one (cron backfill). */
+  /** Assign payment_access_token for unpaid invoices missing one (cron backfill). */
   async backfillMissingPaymentLinks(options?: {
     month?: number
     year?: number
@@ -1504,7 +1678,7 @@ export const paymentService = {
       .from("invoices")
       .select("id")
       .in("status", ["PENDING", "OVERDUE"])
-      .is("midtrans_payment_url", null)
+      .is("payment_access_token", null)
       .order("created_at", { ascending: true })
       .limit(batchLimit)
 
@@ -1515,7 +1689,7 @@ export const paymentService = {
     assertSupabaseOk(error, "invoices query")
 
     const invoiceIds = (invoices ?? []).map((row) => row.id)
-    const linkResult = await paymentService.createCheckoutLinksForInvoices(invoiceIds)
+    const linkResult = await paymentService.backfillPaymentTokensForInvoices(invoiceIds)
 
     const defaults = currentMonthYearInCenterTimezone()
     return {
@@ -1616,6 +1790,7 @@ export const paymentService = {
       .update({
         status: "CANCELLED",
         midtrans_payment_url: null,
+        midtrans_snap_created_at: null,
       })
       .eq("id", invoiceId)
       .select()

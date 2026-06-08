@@ -193,6 +193,8 @@ export interface Database {
           midtrans_payment_url: string | null
           midtrans_transaction_id: string | null
           midtrans_order_ids: string[]
+          payment_access_token: string
+          midtrans_snap_created_at: string | null
           school_level_at_billing: SchoolLevel
           notes: string | null
           created_by: string | null
@@ -212,6 +214,8 @@ export interface Database {
           midtrans_payment_url?: string | null
           midtrans_transaction_id?: string | null
           midtrans_order_ids?: string[]
+          payment_access_token?: string
+          midtrans_snap_created_at?: string | null
           school_level_at_billing: SchoolLevel
           notes?: string | null
           created_by?: string | null
@@ -231,6 +235,8 @@ export interface Database {
           midtrans_payment_url?: string | null
           midtrans_transaction_id?: string | null
           midtrans_order_ids?: string[]
+          payment_access_token?: string
+          midtrans_snap_created_at?: string | null
           school_level_at_billing?: SchoolLevel
           notes?: string | null
           updated_at?: string

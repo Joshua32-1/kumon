@@ -636,7 +636,7 @@ export default function StudentDetailPage({ params }: PageProps) {
                 <div>
                   <p className="text-muted-foreground text-xs">Link Midtrans</p>
                   <p className="text-sm font-medium">
-                    {currentInvoice.midtrans_payment_url ? "Ada" : "Belum ada"}
+                    {currentInvoice.payment_access_token ? "Ada" : "Belum ada"}
                   </p>
                 </div>
                 <div>

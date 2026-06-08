@@ -20,6 +20,7 @@ import {
   sendConfirmationAction,
   reconcileMidtransAction,
 } from "../actions"
+import { buildPaymentLinkFromEnv } from "@/lib/payments/pay-link"
 import type { InvoiceWithStudent, PaymentReminder } from "../types"
 
 interface InvoiceCardProps {
@@ -144,10 +145,12 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
     }
   }
 
+  const paymentLink = buildPaymentLinkFromEnv(invoice.payment_access_token)
+
   const attentionMessage: { text: string; variant: "orange" | "red" } | null =
     summary.attentionReason === "delivery"
       ? summary.whatsappStatus === "no_link"
-        ? { text: "Link Midtrans belum dibuat. Buat link agar bisa dikirim ke orang tua.", variant: "orange" }
+        ? { text: "Link pembayaran belum tersedia. Hubungi admin jika perlu.", variant: "orange" }
         : summary.whatsappStatus === "send_failed"
         ? { text: "Pengiriman WhatsApp gagal. Coba kirim ulang atau salin pesan secara manual.", variant: "orange" }
         : summary.whatsappStatus === "partial_failed"
@@ -244,16 +247,16 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
             )}
           </div>
 
-          {invoice.midtrans_payment_url && (
+          {paymentLink && (
             <div className="rounded-md bg-muted/50 px-3 py-2 text-xs break-all">
-              <span className="text-muted-foreground">Link: </span>
+              <span className="text-muted-foreground">Link pembayaran: </span>
               <a
-                href={invoice.midtrans_payment_url}
+                href={paymentLink}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary hover:underline"
               >
-                {invoice.midtrans_payment_url}
+                {paymentLink}
               </a>
             </div>
           )}
@@ -410,7 +413,7 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
         open={cancelOpen}
         onOpenChange={setCancelOpen}
         title="Batalkan Tagihan"
-        description="Tagihan dibatalkan dan link Midtrans dinonaktifkan (sebaiknya). Orang tua tidak perlu membayar tagihan ini; Anda dapat membuat tagihan baru untuk bulan yang sama nanti."
+        description="Tagihan dibatalkan dan sesi Midtrans dinonaktifkan (sebaiknya). Orang tua tidak perlu membayar tagihan ini; Anda dapat membuat tagihan baru untuk bulan yang sama nanti."
         confirmLabel="Batalkan Tagihan"
         variant="destructive"
         onConfirm={handleCancel}
@@ -420,7 +423,7 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
         open={regenerateOpen}
         onOpenChange={setRegenerateOpen}
         title="Hitung Ulang Tagihan"
-        description="Jumlah dan rincian mata pelajaran diperbarui dari data siswa saat ini. Link Midtrans lama dinonaktifkan dan link baru dibuat."
+        description="Jumlah dan rincian mata pelajaran diperbarui dari data siswa saat ini. Sesi Midtrans lama dinonaktifkan; link pembayaran yang sama akan membuka checkout baru saat dibuka."
         confirmLabel="Hitung Ulang"
         onConfirm={handleRegenerate}
         isLoading={isProcessing}

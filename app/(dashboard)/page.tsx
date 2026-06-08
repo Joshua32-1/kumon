@@ -45,7 +45,7 @@ async function getDashboardStats() {
       .eq("status", "TEMPORARY_LEAVE"),
     supabase
       .from("invoices")
-      .select("id, student_id, month, year, amount, status, due_date, midtrans_payment_url, payment_reminders(status, scheduled_date)")
+      .select("id, student_id, month, year, amount, status, due_date, payment_access_token, payment_reminders(status, scheduled_date)")
       .in("status", ["PENDING", "OVERDUE"]),
     supabase
       .from("invoices")

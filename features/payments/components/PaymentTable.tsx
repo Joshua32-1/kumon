@@ -33,10 +33,10 @@ const columns: Column<InvoiceWithStudent>[] = [
     cell: (row) => <PaymentStatusBadge status={row.status} />,
   },
   {
-    key: "midtrans_link",
-    header: "Link Midtrans",
+    key: "payment_link",
+    header: "Link bayar",
     cell: (row) =>
-      row.midtrans_payment_url ? (
+      row.payment_access_token ? (
         <span className="text-xs font-medium text-[var(--success)]">Ada</span>
       ) : (
         <span className="text-xs text-muted-foreground">Belum</span>

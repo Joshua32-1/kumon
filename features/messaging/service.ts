@@ -5,7 +5,7 @@ import {
   type InvoiceLineItem,
   type SchoolLevel,
 } from "@/lib/billing/fees"
-import type { MessagingProvider, MessageResult } from "./types"
+import type { MessagingProvider, MessageResult, TemplateComponent } from "./types"
 import type { Invoice } from "@/features/payments/types"
 import type { Contact } from "@/features/students/types"
 
@@ -30,42 +30,94 @@ function subjectLabelsFromLineItems(lineItems: LineItemInput[]): string[] {
 
 // ── Providers ─────────────────────────────────────────────────────────────
 
-class FonnteProvider implements MessagingProvider {
+class MetaCloudProvider implements MessagingProvider {
+  private get accessToken(): string | undefined {
+    return process.env.META_ACCESS_TOKEN
+  }
+  private get phoneNumberId(): string | undefined {
+    return process.env.META_PHONE_NUMBER_ID
+  }
+  private get apiVersion(): string {
+    return process.env.META_API_VERSION ?? "v21.0"
+  }
+  private get apiUrl(): string {
+    return `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`
+  }
+
+  private normalizePhone(to: string): string {
+    return to.startsWith("+") ? to.slice(1) : to
+  }
+
   async send(to: string, message: string): Promise<MessageResult> {
-    const apiUrl = process.env.WHATSAPP_API_URL
-    const apiKey = process.env.WHATSAPP_API_KEY
-
-    if (!apiUrl || !apiKey) {
-      console.warn("WhatsApp env vars not set — message not sent")
-      return { success: false, provider: "fonnte", error: "Not configured" }
+    if (!this.accessToken || !this.phoneNumberId) {
+      console.warn("Meta Cloud API env vars not set — message not sent")
+      return { success: false, provider: "meta", error: "Not configured" }
     }
-
     try {
-      const res = await fetch(apiUrl, {
+      const res = await fetch(this.apiUrl, {
         method: "POST",
         headers: {
-          Authorization: apiKey,
+          Authorization: `Bearer ${this.accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ target: to, message }),
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: this.normalizePhone(to),
+          type: "text",
+          text: { body: message },
+        }),
       })
       const data = await res.json()
-      return {
-        success: data.status === true,
-        provider: "fonnte",
-        message_id: data.id,
-        error: data.reason,
+      if (res.ok && data.messages?.[0]?.id) {
+        return { success: true, provider: "meta", message_id: data.messages[0].id }
       }
+      return { success: false, provider: "meta", error: data.error?.message ?? "Unknown error" }
     } catch (err) {
-      return { success: false, provider: "fonnte", error: String(err) }
+      return { success: false, provider: "meta", error: String(err) }
+    }
+  }
+
+  async sendTemplate(
+    to: string,
+    templateName: string,
+    languageCode: string,
+    components: TemplateComponent[]
+  ): Promise<MessageResult> {
+    if (!this.accessToken || !this.phoneNumberId) {
+      console.warn("Meta Cloud API env vars not set — message not sent")
+      return { success: false, provider: "meta", error: "Not configured" }
+    }
+    try {
+      const res = await fetch(this.apiUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: this.normalizePhone(to),
+          type: "template",
+          template: {
+            name: templateName,
+            language: { code: languageCode },
+            components,
+          },
+        }),
+      })
+      const data = await res.json()
+      if (res.ok && data.messages?.[0]?.id) {
+        return { success: true, provider: "meta", message_id: data.messages[0].id }
+      }
+      return { success: false, provider: "meta", error: data.error?.message ?? "Unknown error" }
+    } catch (err) {
+      return { success: false, provider: "meta", error: String(err) }
     }
   }
 }
 
 function getProvider(): MessagingProvider {
-  const provider = process.env.WHATSAPP_PROVIDER ?? "fonnte"
-  if (provider === "fonnte") return new FonnteProvider()
-  throw new Error(`Unknown WhatsApp provider: ${provider}`)
+  return new MetaCloudProvider()
 }
 
 // ── Message templates ──────────────────────────────────────────────────────
@@ -158,6 +210,37 @@ export const messagingService = {
     lineItems: Array<Partial<LineItemInput>> = [],
     context: PaymentWhatsAppContext
   ): Promise<MessageResult> {
+    const provider = getProvider()
+    const templateName = process.env.META_TEMPLATE_REMINDER_NAME
+    const languageCode = process.env.META_TEMPLATE_REMINDER_LANGUAGE ?? "id"
+
+    if (templateName && provider.sendTemplate) {
+      const normalized = normalizeLineItems(lineItems)
+      const ordinal = ["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`
+      const subjects = subjectLabelsFromLineItems(normalized)
+      const subjectsText = subjects.length > 0 ? subjects.join(", ") : "—"
+      // Named template body params (Meta parameter_format: named)
+      const components: TemplateComponent[] = [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", parameter_name: "nama_orang_tua", text: contact.full_name },
+            { type: "text", parameter_name: "nama_siswa", text: context.studentName },
+            { type: "text", parameter_name: "pengingat_ke", text: ordinal },
+            {
+              type: "text",
+              parameter_name: "bulan_tagihan",
+              text: `${getMonthName(invoice.month)} ${invoice.year}`,
+            },
+            { type: "text", parameter_name: "total_tagihan", text: formatRupiah(invoice.amount) },
+            { type: "text", parameter_name: "link_pembayaran", text: paymentUrl },
+            { type: "text", parameter_name: "mata_pelajaran", text: subjectsText },
+          ],
+        },
+      ]
+      return provider.sendTemplate(contact.whatsapp_number, templateName, languageCode, components)
+    }
+
     const message = buildPaymentReminderMessage({
       contactName: contact.full_name,
       studentName: context.studentName,
@@ -176,6 +259,34 @@ export const messagingService = {
     lineItems: Array<Partial<LineItemInput>> = [],
     context: PaymentWhatsAppContext
   ): Promise<MessageResult> {
+    const provider = getProvider()
+    const templateName = process.env.META_TEMPLATE_CONFIRMATION_NAME
+    const languageCode = process.env.META_TEMPLATE_CONFIRMATION_LANGUAGE ?? "id"
+
+    if (templateName && provider.sendTemplate) {
+      const normalized = normalizeLineItems(lineItems)
+      const subjects = subjectLabelsFromLineItems(normalized)
+      const subjectsText = subjects.length > 0 ? subjects.join(", ") : "—"
+      // Named template body params (Meta parameter_format: named)
+      const components: TemplateComponent[] = [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", parameter_name: "nama_orang_tua", text: contact.full_name },
+            { type: "text", parameter_name: "nama_siswa", text: context.studentName },
+            {
+              type: "text",
+              parameter_name: "bulan_tagihan",
+              text: `${getMonthName(invoice.month)} ${invoice.year}`,
+            },
+            { type: "text", parameter_name: "total_tagihan", text: formatRupiah(invoice.amount) },
+            { type: "text", parameter_name: "mata_pelajaran", text: subjectsText },
+          ],
+        },
+      ]
+      return provider.sendTemplate(contact.whatsapp_number, templateName, languageCode, components)
+    }
+
     const message = buildPaymentConfirmationMessage({
       contactName: contact.full_name,
       studentName: context.studentName,

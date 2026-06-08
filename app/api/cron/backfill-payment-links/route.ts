@@ -5,8 +5,8 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 
-// Retries + delay between Snap calls (batch default 50 × ~2.5s ≈ 2 min)
-export const maxDuration = 300
+// Assigns missing payment_access_token for unpaid invoices (no Midtrans calls)
+export const maxDuration = 60
 
 const bodySchema = z
   .object({

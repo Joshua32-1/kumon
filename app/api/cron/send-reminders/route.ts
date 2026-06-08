@@ -4,7 +4,14 @@ import { paymentService } from "@/features/payments/service"
 import { verifyCronAuth } from "@/lib/auth/cron"
 import { apiSuccess, apiError, todayInCenterTimezone, dayOfMonthFromDateString } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
-import { DEFAULT_REMINDER_DAYS } from "@/lib/constants"
+import {
+  DEFAULT_REMINDER_DAYS,
+  REMINDER_SLOT_COUNT,
+  REMINDER_PHASE2_START_SLOT,
+  REMINDER_SLOT_START_MINUTES_WIB,
+  REMINDER_SLOT_INTERVAL_MIN,
+  REMINDER_SLOT_INFER_OFFSET_MIN,
+} from "@/lib/constants"
 
 // Allow up to 5 minutes per slot (100 sends × 2s delay ≈ 3.3 min)
 export const maxDuration = 300
@@ -12,31 +19,34 @@ export const maxDuration = 300
 const bodySchema = z
   .object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    slot: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
+    slot: z.number().int().min(1).max(REMINDER_SLOT_COUNT).optional(),
   })
   .optional()
 
 /**
  * Infer which slot this invocation represents based on the current WIB time.
- * Cron schedule (WIB): 09:00 slot1 · 09:30 slot2 · 10:00 slot3 · 10:30 slot4
- * UTC equivalents:     02:00      · 02:30       · 03:00       · 03:30
+ * Cron schedule (WIB): 09:00 slot1 · 09:30 slot2 · … · 13:30 slot10
+ * UTC equivalents:     02:00      · 02:30       · … · 06:30
  */
-function inferSlot(): 1 | 2 | 3 | 4 {
+function inferSlot(): number {
   const now = new Date()
-  // Offset to WIB (UTC+7)
   const wibHour = (now.getUTCHours() + 7) % 24
   const wibMinute = now.getUTCMinutes()
   const wibTime = wibHour * 60 + wibMinute
 
-  if (wibTime < 9 * 60 + 15) return 1       // before 09:15 → slot 1
-  if (wibTime < 9 * 60 + 45) return 2        // 09:15–09:45 → slot 2
-  if (wibTime < 10 * 60 + 15) return 3       // 09:45–10:15 → slot 3
-  return 4                                    // 10:15+ → slot 4
+  for (let slot = 1; slot < REMINDER_SLOT_COUNT; slot++) {
+    const boundary =
+      REMINDER_SLOT_START_MINUTES_WIB +
+      (slot - 1) * REMINDER_SLOT_INTERVAL_MIN +
+      REMINDER_SLOT_INFER_OFFSET_MIN
+    if (wibTime < boundary) return slot
+  }
+  return REMINDER_SLOT_COUNT
 }
 
-/** Slots 1–2: Phase 1 only. Slots 3–4: Phase 1 + Phase 2 (overdue chase). */
-function slotOptions(slot: 1 | 2 | 3 | 4): { includeOverdueChase: boolean } {
-  return { includeOverdueChase: slot >= 3 }
+/** Slots 1–9: Phase 1 only. Slot 10: Phase 1 + Phase 2 (overdue chase). */
+function slotOptions(slot: number): { includeOverdueChase: boolean } {
+  return { includeOverdueChase: slot >= REMINDER_PHASE2_START_SLOT }
 }
 
 async function handleSendReminders(request: NextRequest) {
@@ -46,7 +56,7 @@ async function handleSendReminders(request: NextRequest) {
 
   try {
     let date: string | undefined
-    let slot: 1 | 2 | 3 | 4 | undefined
+    let slot: number | undefined
 
     if (request.method === "POST") {
       try {
@@ -61,15 +71,12 @@ async function handleSendReminders(request: NextRequest) {
       }
     }
 
-    // On non-reminder days, Phase 2 never runs regardless of slot,
-    // but still allow a manual run with slot override for testing.
     const effectiveDate = date ?? todayInCenterTimezone()
     const dayOfMonth = dayOfMonthFromDateString(effectiveDate)
     const isReminderDay = DEFAULT_REMINDER_DAYS.includes(dayOfMonth)
 
-    // If no slot provided in body, infer from current time (on reminder days)
-    // or default to slot 4 behavior (for manual/testing runs on non-reminder days)
-    const effectiveSlot: 1 | 2 | 3 | 4 = slot ?? (isReminderDay ? inferSlot() : 4)
+    const effectiveSlot =
+      slot ?? (isReminderDay ? inferSlot() : REMINDER_SLOT_COUNT)
 
     const result = await paymentService.processDueReminders(date, {
       slot: effectiveSlot,

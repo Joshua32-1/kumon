@@ -224,7 +224,7 @@ export function GenerateInvoicesDialog({
     const r = result.data
     const linksMsg =
       r?.payment_links_created != null
-        ? ` ${r.payment_links_created} link Midtrans dibuat.`
+        ? ` ${r.payment_links_created} link pembayaran siap.`
         : ""
     const failedLinksMsg =
       r?.payment_links_failed

@@ -5,8 +5,8 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 
-// Sequential Midtrans link creation for every billable student (200+ can exceed 60s)
-export const maxDuration = 300
+// Invoice + payment token creation per billable student (no Midtrans at generation)
+export const maxDuration = 120
 
 const bodySchema = z
   .object({

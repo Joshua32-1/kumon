@@ -34,9 +34,10 @@ export async function proxy(request: NextRequest) {
   const isAuthRoute = pathname.startsWith("/login")
   const isApiWebhook = pathname.startsWith("/api/webhooks")
   const isApiCron = pathname.startsWith("/api/cron")
+  const isPublicPay = pathname.startsWith("/pay")
   const isStaticOrApi = pathname.startsWith("/_next") || pathname.startsWith("/favicon")
 
-  if (!user && !isAuthRoute && !isApiWebhook && !isApiCron && !isStaticOrApi) {
+  if (!user && !isAuthRoute && !isApiWebhook && !isApiCron && !isPublicPay && !isStaticOrApi) {
     return NextResponse.redirect(new URL("/login", request.url))
   }
 

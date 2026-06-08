@@ -14,6 +14,7 @@ export interface MidtransTransactionStatus {
   fraud_status?: string
   transaction_id?: string
   gross_amount: string
+  expiry_time?: string
 }
 
 interface MidtransCore {

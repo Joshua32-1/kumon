@@ -37,9 +37,11 @@ Fill in all values:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API (service role) |
+| `NEXT_PUBLIC_APP_URL` | Public app URL for parent pay links (e.g. `https://yourcenter.vercel.app`) |
 | `MIDTRANS_SERVER_KEY` | Midtrans dashboard → Settings → Access Keys |
 | `MIDTRANS_CLIENT_KEY` | Midtrans dashboard → Settings → Access Keys |
 | `MIDTRANS_IS_PRODUCTION` | `false` for sandbox, `true` for production |
+| `MIDTRANS_PAGE_EXPIRY_HOURS` | Optional — Snap page lifetime when parent opens pay link (default `24`) |
 | `WHATSAPP_PROVIDER` | `fonnte` (default) |
 | `WHATSAPP_API_KEY` | Your Fonnte API key |
 | `WHATSAPP_API_URL` | `https://api.fonnte.com/send` |
@@ -72,13 +74,11 @@ Invoice generation and WhatsApp reminders run via cron API routes, scheduled by 
 | Schedule (WIB) | Endpoint | What it does |
 |---|---|---|
 | 1 Jul, 00:00 | `GET /api/cron/promote-grades` | Promotes grade for all **ACTIVE** and **TEMPORARY_LEAVE** students (TK 1→TK 2→…→SD 6→SMP 1→…→SMA 3; SMA 3 unchanged). Updates billing tier (TK/SD vs SMP/SMA) from grade. Skips **INACTIVE** only. **Idempotent per year** — a second run for the same promotion year is a no-op (`already_promoted: true`). Only allowed in July (WIB) unless overridden for testing. |
-| 1st, 07:00 | `GET /api/cron/generate-invoices` | Marks all older unpaid (`PENDING`) invoices as `OVERDUE`, then creates one invoice per **ACTIVE** or **TEMPORARY_LEAVE** student for the current month (skips students with a `temporary_leaves` row for that month, with an existing non-cancelled invoice, or with no subjects enrolled). Amount = sum of per-subject fees for that student's school level. Creates Midtrans payment links (500ms delay between calls, exponential backoff on 429/5xx). Schedules reminders for the 1st, 11th, and 21st. |
-| Daily, 07:30 | `GET /api/cron/backfill-payment-links` | Retries Midtrans link creation for up to 50 unpaid (`PENDING`/`OVERDUE`) invoices missing a payment URL (oldest first). Catches rate-limit failures from invoice generation before morning reminders. |
-| 1st, 11th, 21st — 09:00 WIB (slot 1) | `GET /api/cron/send-reminders` | **Slot 1** of 4. Sends up to 100 current-month scheduled reminders (Phase 1). 2s delay between sends. |
-| 1st, 11th, 21st — 09:30 WIB (slot 2) | `GET /api/cron/send-reminders` | **Slot 2**. Continues Phase 1 remainder (up to 100). |
-| 1st, 11th, 21st — 10:00 WIB (slot 3) | `GET /api/cron/send-reminders` | **Slot 3**. Phase 1 remainder + starts **Phase 2** (OVERDUE/prior-month chase). Up to 100 each. |
-| 1st, 11th, 21st — 10:30 WIB (slot 4) | `GET /api/cron/send-reminders` | **Slot 4**. Phase 2 overdue backlog. Total morning capacity: ~400 sends. |
-| Daily, 22:00 | `GET /api/cron/reconcile-payments` | Polls Midtrans for unpaid invoices (6+ hours old) with a payment link. Syncs `PAID` status and sends confirmation WhatsApp when Midtrans shows settlement but the webhook was missed. |
+| 1st, 07:00 | `GET /api/cron/generate-invoices` | Marks all older unpaid (`PENDING`) invoices as `OVERDUE`, then creates one invoice per **ACTIVE** or **TEMPORARY_LEAVE** student for the current month (skips students with a `temporary_leaves` row for that month, with an existing non-cancelled invoice, or with no subjects enrolled). Amount = sum of per-subject fees for that student's school level. Assigns a stable app pay link (`/pay/{token}`) per invoice — Midtrans checkout is created only when a parent opens the link. Schedules reminders for the 1st, 11th, and 21st. |
+| Daily, 07:30 | `GET /api/cron/backfill-payment-links` | Assigns `payment_access_token` for up to 50 unpaid (`PENDING`/`OVERDUE`) invoices missing a token (oldest first). Safety net for legacy rows before morning reminders. |
+| 1st, 11th, 21st — 09:00–13:00 WIB (slots 1–9) | `GET /api/cron/send-reminders` | **Slots 1–9** of 10 (every 30 min). Phase 1 only — current-month scheduled reminders, up to 100 sends per slot, 2s delay between sends. |
+| 1st, 11th, 21st — 13:30 WIB (slot 10) | `GET /api/cron/send-reminders` | **Slot 10**. Phase 1 remainder + **Phase 2** (OVERDUE/prior-month chase). Total morning capacity: **~1000 sends**. |
+| Daily, 22:00 | `GET /api/cron/reconcile-payments` | Polls Midtrans for unpaid invoices (6+ hours old) that have opened checkout at least once. Syncs `PAID` status and sends confirmation WhatsApp when Midtrans shows settlement but the webhook was missed. |
 
 Each student gets **at most one active invoice per month** (unique on `student_id + month + year` where status is not `CANCELLED` or `PAID_OLD_LINK`).
 
@@ -115,7 +115,7 @@ curl http://localhost:3000/api/cron/promote-grades \
 curl http://localhost:3000/api/cron/reconcile-payments \
   -H "Authorization: Bearer YOUR_CRON_SECRET"
 
-# Backfill missing Midtrans payment links
+# Backfill missing payment tokens
 curl http://localhost:3000/api/cron/backfill-payment-links \
   -H "Authorization: Bearer YOUR_CRON_SECRET"
 ```
@@ -135,11 +135,11 @@ curl -X POST http://localhost:3000/api/cron/send-reminders \
   -H "Content-Type: application/json" \
   -d '{"slot": 1}'
 
-# Send due reminders — slot 3 (Phase 1 + Phase 2 overdue chase)
+# Send due reminders — slot 10 (Phase 1 + Phase 2 overdue chase)
 curl -X POST http://localhost:3000/api/cron/send-reminders \
   -H "x-api-key: YOUR_WEBHOOK_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"slot": 3}'
+  -d '{"slot": 10}'
 
 # Promote grades off-season (dev only — requires explicit promotionYear)
 curl -X POST http://localhost:3000/api/cron/promote-grades \
@@ -158,22 +158,27 @@ curl -X POST http://localhost:3000/api/cron/backfill-payment-links \
   -d '{"month": 6, "year": 2026, "batch_limit": 100}'
 ```
 
-### Midtrans link rate limiting
+### Parent payment links (`/pay/{token}`)
 
-Bulk invoice generation creates Snap payment links sequentially. To avoid Midtrans throttling:
+WhatsApp reminders send a stable app URL (`NEXT_PUBLIC_APP_URL/pay/{token}`), not a Midtrans URL. When a parent opens it:
+
+1. The app validates the invoice (`PENDING`/`OVERDUE`, active student).
+2. If the current Midtrans order is still `pending` and not expired, redirect to the existing Snap page.
+3. Otherwise create a fresh Snap session (with `page_expiry` from `MIDTRANS_PAGE_EXPIRY_HOURS`).
+
+Midtrans is **not** called during invoice generation or reminder send.
 
 | Env var | Default | Meaning |
 |---------|---------|---------|
-| `MIDTRANS_LINK_DELAY_MS` | `500` | Milliseconds between link-creation calls |
-| `MIDTRANS_RETRY_ATTEMPTS` | `4` | Max attempts per Snap call (exponential backoff) |
+| `NEXT_PUBLIC_APP_URL` | — | Required — base URL for pay links in WhatsApp |
+| `MIDTRANS_PAGE_EXPIRY_HOURS` | `24` | Snap page lifetime per checkout session |
+| `MIDTRANS_RETRY_ATTEMPTS` | `4` | Max attempts per Snap call on parent click (exponential backoff) |
 | `MIDTRANS_RETRY_BASE_DELAY_MS` | `2000` | Base delay before first retry on 429/5xx |
-| `MIDTRANS_BACKFILL_BATCH_LIMIT` | `50` | Invoices processed per backfill cron run |
-
-If some links still fail, the daily backfill cron retries them before morning WhatsApp reminders. Reminder sends also call `ensureCheckoutLink` as a last resort.
+| `MIDTRANS_BACKFILL_BATCH_LIMIT` | `50` | Invoices processed per token backfill cron run |
 
 ### WhatsApp send rate limiting
 
-For centers with 200+ students, the send-reminders cron uses a **four-slot morning schedule** to stay within Fonnte limits and Vercel function timeouts.
+For centers with up to ~1000 students, the send-reminders cron uses a **ten-slot morning schedule** (09:00–13:30 WIB) to stay within Fonnte limits and Vercel function timeouts.
 
 | Env var | Default | Meaning |
 |---------|---------|---------|
@@ -185,12 +190,12 @@ Long-running cron routes set `maxDuration` (requires **Vercel Pro** — Hobby ca
 | Route | `maxDuration` | Why |
 |-------|---------------|-----|
 | `send-reminders` | 300 | 100 sends × 2s delay ≈ 3.3 min per slot |
-| `generate-invoices` | 300 | Sequential Midtrans Snap link per billable student |
+| `generate-invoices` | 120 | Invoice + token creation per billable student |
 | `reconcile-payments` | 120 | Sequential Midtrans status check per pending invoice |
 
 **Vercel Hobby** cannot run reminder or invoice-generation workloads at scale — functions time out after ~10s. Use **Vercel Pro** (for `maxDuration` up to 300s) or an **external cron** (e.g. GitHub Actions, cron-job.org) that calls the same GET endpoints with `Authorization: Bearer {CRON_SECRET}`.
 
-Slots 1–2 send only current-month reminders (Phase 1). Slots 3–4 also send overdue/prior-month chase messages (Phase 2). Deduplication is automatic — already-SENT rows are skipped by subsequent slots.
+Slots 1–9 send only current-month reminders (Phase 1). Slot 10 also sends overdue/prior-month chase messages (Phase 2). Deduplication is automatic — already-SENT rows are skipped by subsequent slots.
 
 ### Attention and arrears tracking
 
@@ -209,8 +214,8 @@ Settings → **Maks. Bulan Cuti Berturut-turut** (default 3) counts **adjacent c
 ### Grades and invoice admin actions
 
 - Students have structured grades (TK 1–2, SD 1–6, SMP 1–3, SMA 1–3). Billing tier (TK/SD vs SMP/SMA) is derived from grade.
-- **Batalkan** — cancels an unpaid invoice and expires the Midtrans link (best-effort).
-- **Hitung ulang tagihan** — recalculates line items from current enrollment, expires the old link, creates a new one (status stays PENDING/OVERDUE).
+- **Batalkan** — cancels an unpaid invoice and expires the Midtrans session (best-effort). The app pay link then shows “dibatalkan”.
+- **Hitung ulang tagihan** — recalculates line items from current enrollment, expires the old Midtrans session; the same app pay link opens a fresh checkout on next click (status stays PENDING/OVERDUE).
 - **Sinkronkan Midtrans** — checks Midtrans for a successful payment and updates the invoice (use when the webhook was missed). Sends confirmation WhatsApp on normal `PAID` sync.
 - **Tandai Lunas** — manual override for cash/bank transfer (no Midtrans order to verify). Does not auto-send confirmation WhatsApp; use **Kirim konfirmasi pembayaran** after.
 - If a parent pays a **stale** link after cancel/waive/regenerate, the invoice becomes **Lunas (link lama)** (`PAID_OLD_LINK`) for admin follow-up (no auto confirmation WhatsApp).

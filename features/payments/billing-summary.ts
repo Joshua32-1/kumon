@@ -2,7 +2,7 @@ import type { Invoice, PaymentReminder } from "./types"
 
 export type WhatsAppDeliveryStatus =
   | "not_applicable"  // no invoice (cuti / inactive / no subjects generated)
-  | "no_link"         // invoice exists, no midtrans_payment_url
+  | "no_link"         // invoice exists, no payment_access_token
   | "link_not_sent"   // link exists, zero SENT reminders (and no delivery failures)
   | "sent"            // at least one SENT reminder
   | "send_failed"     // at least one FAILED, none SENT
@@ -30,7 +30,7 @@ export function getWhatsAppDeliveryStatus(
   reminders: PaymentReminder[]
 ): WhatsAppDeliveryStatus {
   if (!invoice) return "not_applicable"
-  if (!invoice.midtrans_payment_url) return "no_link"
+  if (!invoice.payment_access_token) return "no_link"
 
   const hasSent = reminders.some((r) => r.status === "SENT")
   const hasFailed = reminders.some((r) => r.status === "FAILED")
@@ -43,7 +43,7 @@ export function getWhatsAppDeliveryStatus(
 
 /**
  * An invoice needs attention when it is unpaid AND one of:
- * - no Midtrans link yet, not sent, or send failed → "delivery"
+ * - no pay link token yet, not sent, or send failed → "delivery"
  * - OVERDUE status, or PENDING past its due_date → "collection"
  *
  * When both conditions are true, reason is "delivery" (fix ops first).
