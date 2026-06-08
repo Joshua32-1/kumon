@@ -109,7 +109,17 @@ class MetaCloudProvider implements MessagingProvider {
       if (res.ok && data.messages?.[0]?.id) {
         return { success: true, provider: "meta", message_id: data.messages[0].id }
       }
-      return { success: false, provider: "meta", error: data.error?.message ?? "Unknown error" }
+      const details = data.error?.error_data?.details as string | undefined
+      const base = data.error?.message ?? "Unknown error"
+      const hint =
+        data.error?.code === 132001
+          ? ` (template: ${templateName}, language: ${languageCode})`
+          : ""
+      return {
+        success: false,
+        provider: "meta",
+        error: details ? `${base} — ${details}${hint}` : `${base}${hint}`,
+      }
     } catch (err) {
       return { success: false, provider: "meta", error: String(err) }
     }
