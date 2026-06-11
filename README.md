@@ -7,7 +7,7 @@ Admin panel for managing students, monthly payments, WhatsApp reminders, and Mid
 - **Next.js 15** (App Router, TypeScript)
 - **Supabase** — database, auth, realtime
 - **Midtrans Snap** — payment gateway
-- **Fonnte / WhatsApp Business API** — messaging
+- **Meta WhatsApp Cloud API** — messaging via approved named templates
 - **shadcn/ui** (base-nova) + Tailwind CSS
 
 ## Setup
@@ -42,13 +42,18 @@ Fill in all values:
 | `MIDTRANS_CLIENT_KEY` | Midtrans dashboard → Settings → Access Keys |
 | `MIDTRANS_IS_PRODUCTION` | `false` for sandbox, `true` for production |
 | `MIDTRANS_PAGE_EXPIRY_HOURS` | Optional — Snap page lifetime when parent opens pay link (default `24`) |
-| `WHATSAPP_PROVIDER` | `fonnte` (default) |
-| `WHATSAPP_API_KEY` | Your Fonnte API key |
-| `WHATSAPP_API_URL` | `https://api.fonnte.com/send` |
+| `META_ACCESS_TOKEN` | Permanent access token from Meta Business Manager |
+| `META_PHONE_NUMBER_ID` | Phone number ID from the Meta WhatsApp dashboard |
+| `META_TEMPLATE_REMINDER_NAME` | Approved reminder template name (e.g. `kumon_payment_reminder`) |
+| `META_TEMPLATE_REMINDER_LANGUAGE` | Reminder template language code (e.g. `id`) |
+| `META_TEMPLATE_CONFIRMATION_NAME` | Approved confirmation template name (e.g. `kumon_payment_confirmation`) |
+| `META_TEMPLATE_CONFIRMATION_LANGUAGE` | Confirmation template language code (e.g. `id`) |
 | `WHATSAPP_SEND_DELAY_MS` | Optional — ms between WhatsApp sends in cron (default `2000`) |
 | `WHATSAPP_BATCH_LIMIT` | Optional — max sends per reminder slot (default `100`) |
 | `WEBHOOK_SECRET` | Secret for manual/local cron calls (`x-api-key` header on POST) |
 | `CRON_SECRET` | **Required on Vercel** — Vercel Cron sends `Authorization: Bearer {CRON_SECRET}` on GET |
+
+Templates must be **approved** in WhatsApp Manager for the same phone number as `META_PHONE_NUMBER_ID`, with names and language codes matching exactly — otherwise sends fail with Meta error `(#132001)`. The required template variable names are documented in `.env.local.example`.
 
 ### Subject fees (seeded in migration)
 
@@ -178,7 +183,7 @@ Midtrans is **not** called during invoice generation or reminder send.
 
 ### WhatsApp send rate limiting
 
-For centers with up to ~1000 students, the send-reminders cron uses a **ten-slot morning schedule** (09:00–13:30 WIB) to stay within Fonnte limits and Vercel function timeouts.
+For centers with up to ~1000 students, the send-reminders cron uses a **ten-slot morning schedule** (09:00–13:30 WIB) to stay within WhatsApp rate limits and Vercel function timeouts.
 
 | Env var | Default | Meaning |
 |---------|---------|---------|

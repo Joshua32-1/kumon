@@ -1,0 +1,104 @@
+# API Reference
+
+All HTTP endpoints, grouped by auth class. See [ARCHITECTURE.md](ARCHITECTURE.md) for how auth boundaries work.
+
+**Response envelope** (every `app/api/*` route, via `apiSuccess`/`apiError` in [lib/utils.ts](lib/utils.ts)):
+
+```jsonc
+{ "data": <payload>, "error": null }                          // success
+{ "data": null, "error": { "code": "…", "message": "…" } }    // failure (HTTP status matches)
+```
+
+Common error codes: `VALIDATION_ERROR` (422, message contains flattened zod errors), `UNAUTHORIZED` (401), `INTERNAL_ERROR` (500), plus domain codes from [lib/errors.ts](lib/errors.ts).
+
+Note: the dashboard UI mostly mutates through **server actions** (`features/*/actions.ts`), not these routes. The admin API routes mirror the same services for programmatic access.
+
+## Admin routes (session cookie via middleware)
+
+Unauthenticated requests are redirected to `/login` by [proxy.ts](proxy.ts).
+
+### Students
+
+| Method & path | Purpose | Input |
+|---|---|---|
+| `GET /api/students` | List students | Query: `status` (`ACTIVE`\|`TEMPORARY_LEAVE`\|`INACTIVE`), `search` |
+| `POST /api/students` | Create student (+ primary contact, subjects) | Body: `createStudentSchema` ([features/students/validations.ts](features/students/validations.ts)) → 201 |
+| `GET /api/students/{id}` | Student detail | |
+| `PATCH /api/students/{id}` | Polymorphic update — body shape selects the operation | `{subjects: …}` → update enrollment · `{contact: …}` → update primary contact · otherwise `updateStudentSchema` → update student fields |
+| `DELETE /api/students/{id}` | **Deactivate** (soft — sets `INACTIVE`), not a hard delete | |
+| `POST /api/students/{id}/leave` | Set a temporary-leave month | Body: `{month, year, reason?}` → 201 |
+| `DELETE /api/students/{id}/leave/{leaveId}` | Cancel a leave month | |
+| `GET /api/students/billing` | Invoice-first map `studentId → {invoice, reminders, summary, onLeave}` for a billing month | Query: `month`, `year` (default: current WIB month) |
+| `GET /api/students/leave-review` | Students whose consecutive-leave streak hit the `max_leave_months` threshold | |
+
+### Payments
+
+| Method & path | Purpose | Input |
+|---|---|---|
+| `GET /api/payments` | List invoices | Query: `status`, `month`, `year`, `student_id` |
+| `POST /api/payments/generate` | Generate monthly invoices (admin-triggered equivalent of the cron) | Body: `generateMonthlySchema` ([features/payments/validations.ts](features/payments/validations.ts)) → 201 |
+| `GET /api/payments/{id}` | Invoice detail | |
+| `PATCH /api/payments/{id}` | Status transition | Body `{status, notes?}` — `PAID` → `markPaid` (manual override, no auto WhatsApp) · `WAIVED` → `waive` · `CANCELLED` → `cancel` (expires Midtrans session). Anything else → `INVALID_STATUS` |
+| `POST /api/payments/{id}/checkout` | Force-create a Midtrans checkout for an invoice (admin-side) | |
+
+### Settings & dashboard
+
+| Method & path | Purpose | Input |
+|---|---|---|
+| `GET /api/settings` | All `system_config` rows | |
+| `PATCH /api/settings` | Upsert config rows | Body: `{updates: [{key, value}]}`. Saving `subject_fees` also appends to the historical `subject_fees_schedule` |
+| `GET /api/dashboard/revenue` | Paid-invoice revenue chart summary | Query: `period` (validated by `isRevenueChartPeriod`, default `1_year`) |
+
+## Public routes
+
+### `GET /pay/{token}` — parent payment page
+
+No session; the unguessable per-invoice token is the auth. Resolves via `paymentService.resolvePayPage`:
+
+- Valid unpaid invoice → **302 redirect** to a Midtrans Snap page (reused if still pending/unexpired, else lazily created).
+- Otherwise → small Indonesian-language HTML message page (paid already, cancelled, invalid link, error).
+
+This is the **only** place Snap sessions are created for parents — never at generation/reminder time.
+
+### `POST /api/webhooks/midtrans` — payment notification
+
+Verifies the SHA-512 `signature_key` before anything else (401 `WEBHOOK_INVALID` on mismatch). Then `paymentService.handleMidtransWebhook` maps the transaction status onto the invoice (settlement → `PAID`; stale order → `PAID_OLD_LINK`) and sends the confirmation WhatsApp when appropriate (failure to send is logged, not fatal). Returns `{received: true, …}`.
+
+## Cron routes (`/api/cron/*`)
+
+**Auth** (all five, both methods): `Authorization: Bearer {CRON_SECRET}` (Vercel Cron uses GET) or `x-api-key: {WEBHOOK_SECRET}` (manual, typically POST + JSON overrides). Each route then checks its toggle in `system_config.cron_jobs` and returns `{skipped: true, reason: "cron_disabled"}` when off. All accept GET and POST; POST bodies are optional and zod-validated (an invalid body silently falls back to defaults). All are idempotent.
+
+| Route | vercel.json (UTC → WIB) | `maxDuration` | POST body overrides | Result fields |
+|---|---|---|---|---|
+| `generate-invoices` | `0 0 1 * *` → 1st 07:00 | 120 | `month` 1–12, `year` ≥2020 (default: current WIB month) | `generated`, … (201 if `generated > 0`) |
+| `backfill-payment-links` | `30 0 * * *` → daily 07:30 | 60 | `month`, `year`, `batch_limit` 1–200 | `created`, … (201 if `created > 0`) |
+| `send-reminders` | 10 slots: `0,30 2-6 1,11,21 * *` → 09:00–13:30 on the 1st/11th/21st | 300 | `date` `YYYY-MM-DD`, `slot` 1–10 (default: slot inferred from WIB clock; non-reminder days behave as slot 10) | sent/failed counts per phase |
+| `reconcile-payments` | `0 15 * * *` → daily 22:00 | — | none (fixed `minAgeHours: 6`) | reconciliation summary |
+| `promote-grades` | `0 17 30 6 *` → Jul 1 07:00 | — | `force` bool, `promotionYear` ≥2020 (**required with `force` outside July**) | `promoted`/`unchanged`/`already_promoted` |
+
+Slot semantics: slots 1–9 send current-month reminders only (Phase 1); slot 10 also chases overdue/prior months (Phase 2). Constants in [lib/constants.ts](lib/constants.ts).
+
+### curl recipes
+
+```bash
+# Simulate Vercel Cron (GET + bearer)
+curl http://localhost:3000/api/cron/generate-invoices \
+  -H "Authorization: Bearer $CRON_SECRET"
+
+# Manual override (POST + x-api-key + JSON body)
+curl -X POST http://localhost:3000/api/cron/generate-invoices \
+  -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
+  -d '{"month": 6, "year": 2026}'
+
+curl -X POST http://localhost:3000/api/cron/send-reminders \
+  -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
+  -d '{"slot": 10}'   # Phase 1 remainder + overdue chase
+
+curl -X POST http://localhost:3000/api/cron/promote-grades \
+  -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
+  -d '{"force": true, "promotionYear": 2099}'   # off-season, dev only
+
+curl -X POST http://localhost:3000/api/cron/backfill-payment-links \
+  -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
+  -d '{"month": 6, "year": 2026, "batch_limit": 100}'
+```
