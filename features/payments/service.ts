@@ -830,37 +830,6 @@ export const paymentService = {
     }
   },
 
-  async scheduleReminders(
-    invoiceId: string,
-    studentId: string,
-    month: number,
-    year: number,
-    reminderDays: number[],
-    supabase?: SupabaseClient | typeof supabaseAdmin
-  ): Promise<void> {
-    const db = supabase ?? (await createSupabaseServerClient())
-
-    const { data: contact } = await db
-      .from("contacts")
-      .select("whatsapp_number")
-      .eq("student_id", studentId)
-      .eq("is_primary", true)
-      .single()
-
-    if (!contact) return
-
-    const reminders = reminderDays.map((day, index) => ({
-      invoice_id: invoiceId,
-      student_id: studentId,
-      reminder_number: index + 1,
-      scheduled_date: toDateString(year, month, day),
-      status: "PENDING" as const,
-      whatsapp_number: contact.whatsapp_number,
-    }))
-
-    await db.from("payment_reminders").insert(reminders)
-  },
-
   async ensurePaymentAccessToken(invoiceId: string): Promise<string> {
     const { data: invoice } = await supabaseAdmin
       .from("invoices")
