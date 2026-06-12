@@ -87,10 +87,21 @@ export function verifyMidtransSignature(
   serverKey: string,
   incomingSignature: string
 ): boolean {
+  // Fail closed when the server key or signature is missing. Without this, an
+  // unset MIDTRANS_SERVER_KEY (route falls back to "") lets anyone forge a
+  // settlement by hashing over an empty key and mark invoices PAID.
+  if (!serverKey || !incomingSignature) return false
   const crypto = require("crypto")
-  const hash = crypto
+  const expected = crypto
     .createHash("sha512")
     .update(`${orderId}${statusCode}${grossAmount}${serverKey}`)
     .digest("hex")
-  return hash === incomingSignature
+  // Constant-time comparison. Compare on BYTE length (not JS string length):
+  // timingSafeEqual throws if the buffers differ in byte length, and a
+  // multi-byte incoming signature could match string-length while differing in
+  // bytes. Mismatched length is itself a fail, so returning false is correct.
+  const expectedBuf = Buffer.from(expected, "utf8")
+  const incomingBuf = Buffer.from(incomingSignature, "utf8")
+  if (expectedBuf.length !== incomingBuf.length) return false
+  return crypto.timingSafeEqual(expectedBuf, incomingBuf)
 }

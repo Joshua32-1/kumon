@@ -3,6 +3,14 @@
 // Regenerate baseline with: npx supabase gen types typescript --project-id <id> > types/database.ts
 // Then re-apply manual additions (StudentGrade, PAID_OLD_LINK, promote_grades_annual, etc.).
 
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
+
 export type StudentStatus = "ACTIVE" | "TEMPORARY_LEAVE" | "INACTIVE"
 export type PaymentStatus =
   | "PENDING"
@@ -362,6 +370,10 @@ export interface Database {
     }
     Views: Record<string, never>
     Functions: {
+      create_invoice_with_lines: {
+        Args: { p_invoice: Json; p_lines: Json; p_reminder_days: number[] }
+        Returns: string
+      }
       promote_grades_annual: {
         Args: { p_promotion_year: number }
         Returns: {
@@ -371,6 +383,15 @@ export interface Database {
           unchanged: number
           skipped_inactive: number
         }
+      }
+      regenerate_invoice_lines: {
+        Args: {
+          p_amount: number
+          p_invoice_id: string
+          p_lines: Json
+          p_school_level: Database["public"]["Enums"]["school_level"]
+        }
+        Returns: undefined
       }
     }
     CompositeTypes: Record<string, never>

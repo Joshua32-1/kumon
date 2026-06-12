@@ -140,13 +140,23 @@ export function buildPaymentReminderMessage(params: {
   reminderNumber: number
   paymentUrl: string
   lineItems: Array<Partial<LineItemInput>>
+  /** Fixed word for the {{pengingat_ke}} slot (e.g. "pembaruan" on recalc). */
+  ordinalOverride?: string
 }): string {
-  const { contactName, studentName, schoolLevel, invoice, reminderNumber, paymentUrl, lineItems } =
-    params
+  const {
+    contactName,
+    studentName,
+    schoolLevel,
+    invoice,
+    reminderNumber,
+    paymentUrl,
+    lineItems,
+    ordinalOverride,
+  } = params
   const normalized = normalizeLineItems(lineItems)
   const monthName = getMonthName(invoice.month)
   const total = formatRupiah(invoice.amount)
-  const ordinal = ["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`
+  const ordinal = ordinalOverride ?? (["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`)
 
   const enrollment = formatStudentEnrollmentForWhatsApp(
     studentName,
@@ -218,7 +228,8 @@ export const messagingService = {
     reminderNumber: number,
     paymentUrl: string,
     lineItems: Array<Partial<LineItemInput>> = [],
-    context: PaymentWhatsAppContext
+    context: PaymentWhatsAppContext,
+    ordinalOverride?: string
   ): Promise<MessageResult> {
     const provider = getProvider()
     const templateName = process.env.META_TEMPLATE_REMINDER_NAME
@@ -226,7 +237,7 @@ export const messagingService = {
 
     if (templateName && provider.sendTemplate) {
       const normalized = normalizeLineItems(lineItems)
-      const ordinal = ["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`
+      const ordinal = ordinalOverride ?? (["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`)
       const subjects = subjectLabelsFromLineItems(normalized)
       const subjectsText = subjects.length > 0 ? subjects.join(", ") : "—"
       // Named template body params (Meta parameter_format: named)
@@ -259,6 +270,7 @@ export const messagingService = {
       reminderNumber,
       paymentUrl,
       lineItems,
+      ordinalOverride,
     })
     return this.send(contact.whatsapp_number, message)
   },

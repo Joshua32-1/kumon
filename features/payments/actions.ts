@@ -8,6 +8,7 @@ import {
   sendPaymentLinksSchema,
 } from "./validations"
 import type { GenerateMonthlyInput } from "./types"
+import { AppError } from "@/lib/errors"
 
 export async function generateMonthlyAction(input: GenerateMonthlyInput) {
   const parsed = generateMonthlySchema.safeParse(input)
@@ -59,11 +60,17 @@ export async function createCheckoutAction(invoiceId: string) {
 }
 
 export async function regenerateInvoiceAction(invoiceId: string) {
-  const result = await paymentService.regenerateInvoice(invoiceId)
-  revalidatePath("/payments")
-  revalidatePath(`/payments/${invoiceId}`)
-  revalidatePath("/students")
-  return { data: result }
+  try {
+    const result = await paymentService.regenerateInvoice(invoiceId)
+    revalidatePath("/payments")
+    revalidatePath(`/payments/${invoiceId}`)
+    revalidatePath("/students")
+    return { data: result }
+  } catch (err) {
+    // Surface the reason (e.g. "siswa tidak memiliki mata pelajaran...") to the admin
+    // instead of letting the server action reject (which Next redacts in production).
+    return { error: err instanceof AppError ? err.message : "Gagal menghitung ulang tagihan." }
+  }
 }
 
 export async function sendReminderNowAction(invoiceId: string, reminderId?: string) {
