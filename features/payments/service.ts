@@ -1231,7 +1231,10 @@ export const paymentService = {
       nextNumber,
       paymentUrl,
       lineItems,
-      paymentWhatsAppContext(student, invoice)
+      paymentWhatsAppContext(student, invoice),
+      // Recalc isn't an Nth reminder — fill {{pengingat_ke}} with a fixed word
+      // so the message reads "pengingat pembaruan pembayaran", not "ke-N".
+      "pembaruan"
     )
 
     if (!sendResult.success) {
