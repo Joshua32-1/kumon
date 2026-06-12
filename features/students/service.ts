@@ -382,7 +382,11 @@ export const studentService = {
       p_promotion_year: promotionYear,
     })
 
-    if (error) throw Errors.INTERNAL(error.message)
+    if (error) {
+      // 23514 = check_violation: the year guard rejected an out-of-range promotion year.
+      if (error.code === "23514") throw Errors.BAD_REQUEST(error.message)
+      throw Errors.INTERNAL(error.message)
+    }
 
     const result = data as PromoteGradesResult | null
     if (!result) throw Errors.INTERNAL("Grade promotion returned no result")

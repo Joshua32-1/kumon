@@ -17,6 +17,8 @@ Verify `0006`: `SELECT conname FROM pg_constraint WHERE conname IN ('invoices_am
 
 `0008` require ≥1 line item — both RPCs above (`CREATE OR REPLACE`) now raise `check_violation` when `p_lines` is empty, so a student with no billable subjects can never get an invoice (and therefore no reminders). Verify: `SELECT create_invoice_with_lines('{}'::jsonb, '[]'::jsonb, '{}'::int[]);` should error with "invoice must have at least one line item".
 
+`0009` promote-grades year guard — `CREATE OR REPLACE promote_grades_annual` rejects `p_promotion_year` outside `[2020 .. current WIB year]`. Verify: `SELECT promote_grades_annual(EXTRACT(YEAR FROM now() AT TIME ZONE 'Asia/Jakarta')::int + 1);` should error "invalid promotion year".
+
 ## Enums
 
 | Enum | Values | Notes |
@@ -98,7 +100,7 @@ Singleton settings as JSONB rows — prefer a new key here over a new one-row ta
 
 ## Functions and triggers
 
-- **`promote_grades_annual(p_promotion_year INTEGER) → JSONB`** (0002) — advances `ACTIVE`/`TEMPORARY_LEAVE` grades one step (TK 1 → … → SMA 3; SMA 3 unchanged), updates `school_level`, records the year in `grade_promotion`. Locks the config row (`FOR UPDATE`) and returns `{already_promoted: true, …}` if the year was already done. `SECURITY DEFINER SET search_path = public`.
+- **`promote_grades_annual(p_promotion_year INTEGER) → JSONB`** (0002, hardened in 0009) — advances `ACTIVE`/`TEMPORARY_LEAVE` grades one step (TK 1 → … → SMA 3; SMA 3 unchanged), updates `school_level`, records the year in `grade_promotion`. Locks the config row (`FOR UPDATE`) and returns `{already_promoted: true, …}` if the year was already done. **(0009)** rejects `p_promotion_year` outside `[2020 .. current WIB year]` with a `check_violation`, so a future/typo year can't freeze or over-advance promotions. `SECURITY DEFINER SET search_path = public`.
 - **`create_invoice_with_lines(p_invoice JSONB, p_lines JSONB, p_reminder_days INT[]) → UUID`** (0007) — inserts one invoice, its line items, and (when the student has a primary contact) its reminders in a single transaction; raises `unique_violation` on a duplicate active invoice. Fee/enrollment logic stays in TS; this only persists the precomputed payload. Used by `generateMonthly*`. `SECURITY DEFINER SET search_path = public`.
 - **`regenerate_invoice_lines(p_invoice_id UUID, p_amount INT, p_school_level school_level, p_lines JSONB) → VOID`** (0007) — atomically replaces an invoice's line items + amount and nulls its Midtrans session fields (recalc). Used by `regenerateInvoice`. `SECURITY DEFINER`.
 - **`update_updated_at()`** — trigger on `students`, `contacts`, `invoices` setting `updated_at = NOW()` on update.
