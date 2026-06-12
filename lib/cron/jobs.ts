@@ -6,6 +6,7 @@ export const CRON_JOB_IDS = [
   "send_reminders",
   "reconcile_payments",
   "promote_grades",
+  "sync_leave_status",
 ] as const
 
 export type CronJobId = (typeof CRON_JOB_IDS)[number]
@@ -47,6 +48,12 @@ export const CRON_JOBS: CronJobDefinition[] = [
     label: "Kenaikan Kelas Tahunan",
     description: "Menaikkan kelas siswa aktif pada awal tahun ajaran.",
     schedule: "1 Juli, 00:00 WIB",
+  },
+  {
+    id: "sync_leave_status",
+    label: "Sinkronisasi Status Cuti",
+    description: "Memperbarui status siswa (Aktif/Cuti) sesuai catatan cuti bulan berjalan.",
+    schedule: "Setiap hari, 00:15 WIB",
   },
 ]
 

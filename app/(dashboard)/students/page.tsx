@@ -10,6 +10,8 @@ import { PeriodSelector } from "@/components/shared/PeriodSelector"
 import { AlertBanner } from "@/components/shared/AlertPanel"
 import { StudentTable } from "@/features/students/components/StudentTable"
 import type { StudentBillingEntry } from "@/features/students/components/StudentTable"
+import { BulkLeaveDialog } from "@/features/students/components/BulkLeaveDialog"
+import { LeaveDialog } from "@/features/students/components/LeaveDialog"
 import { Button } from "@/components/ui/button"
 import { currentMonthYearInCenterTimezone } from "@/lib/utils"
 import type { Student, StudentStatus, LeaveReviewListResult } from "@/features/students/types"
@@ -51,16 +53,24 @@ export default function StudentsPage() {
   const [billingMonth, setBillingMonth] = useState(currentMonth)
   const [billingYear, setBillingYear] = useState(currentYear)
   const [attentionOnly, setAttentionOnly] = useState(false)
+  const [bulkLeaveOpen, setBulkLeaveOpen] = useState(false)
+  const [leaveStudent, setLeaveStudent] = useState<Student | null>(null)
 
   const studentUrl = statusParam ? `/api/students?status=${statusParam}` : "/api/students"
   const billingUrl = `/api/students/billing?month=${billingMonth}&year=${billingYear}`
 
-  const { data: students = [], isLoading } = useSWR<Student[]>(studentUrl, fetcher)
-  const { data: billingData } = useSWR(billingUrl, billingFetcher)
-  const { data: leaveReviewData } = useSWR<LeaveReviewListResult>(
+  const { data: students = [], isLoading, mutate: mutateStudents } = useSWR<Student[]>(studentUrl, fetcher)
+  const { data: billingData, mutate: mutateBilling } = useSWR(billingUrl, billingFetcher)
+  const { data: leaveReviewData, mutate: mutateLeaveReview } = useSWR<LeaveReviewListResult>(
     "/api/students/leave-review",
     fetcher
   )
+
+  const refreshAll = () => {
+    mutateStudents()
+    mutateBilling()
+    mutateLeaveReview()
+  }
 
   const leaveReviewMap = new Map(
     (leaveReviewData?.students ?? []).map((s) => [s.id, s])
@@ -91,9 +101,14 @@ export default function StudentsPage() {
         title="Siswa"
         description={`${visibleStudents.length} siswa · Status tagihan ${MONTH_NAMES[billingMonth - 1]} ${billingYear}`}
         action={
-          <Link href="/students/new">
-            <Button>+ Tambah Siswa</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setBulkLeaveOpen(true)}>
+              Atur Cuti Massal
+            </Button>
+            <Link href="/students/new">
+              <Button>+ Tambah Siswa</Button>
+            </Link>
+          </div>
         }
       />
 
@@ -138,7 +153,27 @@ export default function StudentsPage() {
         billingMap={billingMap}
         leaveReviewMap={leaveReviewMap}
         isLoading={isLoading}
+        onSetLeave={(student) => setLeaveStudent(student)}
       />
+
+      <BulkLeaveDialog
+        open={bulkLeaveOpen}
+        onOpenChange={setBulkLeaveOpen}
+        onSuccess={refreshAll}
+      />
+
+      {leaveStudent && (
+        <LeaveDialog
+          studentId={leaveStudent.id}
+          open
+          onOpenChange={(o) => {
+            if (!o) {
+              setLeaveStudent(null)
+              refreshAll()
+            }
+          }}
+        />
+      )}
     </>
   )
 }

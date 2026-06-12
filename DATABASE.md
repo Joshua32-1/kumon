@@ -54,6 +54,7 @@ Parent/guardian WhatsApp contacts. FK `student_id` → students (CASCADE). Colum
 ### temporary_leaves
 One row per student per month on leave. FK `student_id` (CASCADE), `month` (1–12 CHECK), `year`, `reason`, `created_by` → `auth.users`.
 Unique `(student_id, month, year)`. A row here makes the student non-billable for that month. Consecutive-month streaks against the `max_leave_months` config drive the leave-review alerts.
+`students.status = TEMPORARY_LEAVE` is derived from these rows: it means "has a leave row for the current WIB month" and is kept in sync on write (`setLeave`/`setLeaveBulk`/`cancelLeave`) plus nightly by the `sync-leave-status` cron. Billing never reads the status field — these rows are the source of truth.
 
 ### student_subjects
 Enrollment per subject. FK `student_id` (CASCADE), `subject` (`kumon_subject`), `enrolled_at`. Unique `(student_id, subject)`. Students with zero rows are skipped at invoice generation.
@@ -94,7 +95,7 @@ Singleton settings as JSONB rows — prefer a new key here over a new one-row ta
 | `reminder_days` | `{days: [1, 11, 21]}` | |
 | `max_leave_months` | `{months: 3}` | Consecutive-leave review threshold |
 | `center_name` | `{name: …}` | |
-| `cron_jobs` | `{generate_invoices: {enabled}, backfill_payment_links, send_reminders, reconcile_payments, promote_grades}` | Per-job toggles read by [lib/cron/enabled.ts](lib/cron/enabled.ts), edited from Settings |
+| `cron_jobs` | `{generate_invoices: {enabled}, backfill_payment_links, send_reminders, reconcile_payments, promote_grades, sync_leave_status}` | Per-job toggles read by [lib/cron/enabled.ts](lib/cron/enabled.ts), edited from Settings. Ids missing from the stored value default to enabled (`parseCronJobsConfig`), so new jobs need no reseed |
 | `grade_promotion` | `{year: 2025 \| null}` | Last completed promotion year — the RPC's idempotency latch |
 | `whatsapp_provider` | `{provider: …}` | Legacy seed; the active provider is configured via `META_*` env vars |
 

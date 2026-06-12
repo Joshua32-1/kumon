@@ -66,7 +66,7 @@ Verifies the SHA-512 `signature_key` before anything else (401 `WEBHOOK_INVALID`
 
 ## Cron routes (`/api/cron/*`)
 
-**Auth** (all five, both methods): `Authorization: Bearer {CRON_SECRET}` (Vercel Cron uses GET) or `x-api-key: {WEBHOOK_SECRET}` (manual, typically POST + JSON overrides). Each route then checks its toggle in `system_config.cron_jobs` and returns `{skipped: true, reason: "cron_disabled"}` when off. All accept GET and POST; POST bodies are optional and zod-validated (an invalid body silently falls back to defaults). All are idempotent.
+**Auth** (all six, both methods): `Authorization: Bearer {CRON_SECRET}` (Vercel Cron uses GET) or `x-api-key: {WEBHOOK_SECRET}` (manual, typically POST + JSON overrides). Each route then checks its toggle in `system_config.cron_jobs` and returns `{skipped: true, reason: "cron_disabled"}` when off. All accept GET and POST; POST bodies are optional and zod-validated (an invalid body silently falls back to defaults). All are idempotent.
 
 | Route | vercel.json (UTC → WIB) | `maxDuration` | POST body overrides | Result fields |
 |---|---|---|---|---|
@@ -75,8 +75,11 @@ Verifies the SHA-512 `signature_key` before anything else (401 `WEBHOOK_INVALID`
 | `send-reminders` | 10 slots: `0,30 2-6 1,11,21 * *` → 09:00–13:30 on the 1st/11th/21st | 300 | `date` `YYYY-MM-DD`, `slot` 1–10 (default: slot inferred from WIB clock; non-reminder days behave as slot 10) | sent/failed counts per phase |
 | `reconcile-payments` | `0 15 * * *` → daily 22:00 | — | none (fixed `minAgeHours: 6`) | reconciliation summary |
 | `promote-grades` | `0 17 30 6 *` → Jul 1 07:00 | — | `force` bool, `promotionYear` ≥2020 (**required with `force` outside July**) | `promoted`/`unchanged`/`already_promoted` |
+| `sync-leave-status` | `15 17 * * *` → daily 00:15 | — | none | `month`, `year`, `marked_on_leave`, `reactivated` |
 
 Slot semantics: slots 1–9 send current-month reminders only (Phase 1); slot 10 also chases overdue/prior months (Phase 2). Constants in [lib/constants.ts](lib/constants.ts).
+
+`sync-leave-status` enforces the status invariant *status = `TEMPORARY_LEAVE` iff the student has a `temporary_leaves` row for the current WIB month* — it marks `ACTIVE` students with a current-month leave as `TEMPORARY_LEAVE` and reverts `TEMPORARY_LEAVE` students without one to `ACTIVE`. `INACTIVE` students are never touched. Billing never reads the status field (it reads `temporary_leaves` rows), so this is display/KPI hygiene only.
 
 ### curl recipes
 
@@ -101,4 +104,7 @@ curl -X POST http://localhost:3000/api/cron/promote-grades \
 curl -X POST http://localhost:3000/api/cron/backfill-payment-links \
   -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
   -d '{"month": 6, "year": 2026, "batch_limit": 100}'
+
+curl http://localhost:3000/api/cron/sync-leave-status \
+  -H "Authorization: Bearer $CRON_SECRET"   # no body overrides; re-run yields zeros
 ```

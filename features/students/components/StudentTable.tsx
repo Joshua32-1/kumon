@@ -1,7 +1,15 @@
 "use client"
 
 import { useRouter } from "next/navigation"
+import { MoreHorizontal } from "lucide-react"
 import { DataTable, type Column } from "@/components/shared/DataTable"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { StudentStatusBadge } from "./StudentStatusBadge"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { PaymentStatusBadge } from "@/features/payments/components/PaymentStatusBadge"
@@ -24,7 +32,9 @@ export interface StudentBillingEntry {
 
 function makeColumns(
   billingMap: Map<string, StudentBillingEntry>,
-  leaveReviewMap: Map<string, LeaveReviewStudent>
+  leaveReviewMap: Map<string, LeaveReviewStudent>,
+  onSetLeave: ((student: Student) => void) | undefined,
+  onViewProfile: (student: Student) => void
 ): Column<Student>[] {
   const hasBilling = billingMap.size > 0
 
@@ -106,6 +116,32 @@ function makeColumns(
     )
   }
 
+  if (onSetLeave) {
+    cols.push({
+      key: "actions",
+      header: "",
+      className: "w-10 text-right",
+      cell: (row) => (
+        // Keep menu clicks from triggering the row's navigation click handler.
+        <div onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" size="icon" aria-label="Aksi siswa" />}
+            >
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {row.status !== "INACTIVE" && (
+                <DropdownMenuItem onClick={() => onSetLeave(row)}>Atur Cuti</DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => onViewProfile(row)}>Lihat Profil</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ),
+    })
+  }
+
   return cols
 }
 
@@ -114,6 +150,7 @@ interface StudentTableProps {
   billingMap?: Map<string, StudentBillingEntry>
   leaveReviewMap?: Map<string, LeaveReviewStudent>
   isLoading?: boolean
+  onSetLeave?: (student: Student) => void
 }
 
 export function StudentTable({
@@ -121,9 +158,12 @@ export function StudentTable({
   billingMap = new Map(),
   leaveReviewMap = new Map(),
   isLoading,
+  onSetLeave,
 }: StudentTableProps) {
   const router = useRouter()
-  const columns = makeColumns(billingMap, leaveReviewMap)
+  const columns = makeColumns(billingMap, leaveReviewMap, onSetLeave, (student) =>
+    router.push(`/students/${student.id}`)
+  )
 
   return (
     <DataTable

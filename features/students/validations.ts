@@ -53,3 +53,10 @@ export const setLeaveSchema = z.object({
   year: z.number().int().min(2020).max(2100),
   reason: z.string().optional(),
 })
+
+export const setLeaveBulkSchema = setLeaveSchema.extend({
+  student_ids: z
+    .array(z.string().uuid())
+    .min(1, "Pilih minimal 1 siswa")
+    .transform((ids) => [...new Set(ids)]),
+})

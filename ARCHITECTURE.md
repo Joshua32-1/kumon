@@ -64,6 +64,7 @@ Monthly cycle:
 3. **`send-reminders`** (1st/11th/21st, ten half-hour slots 09:00–13:30 WIB) — up to `WHATSAPP_BATCH_LIMIT` (default 100) sends per slot with `WHATSAPP_SEND_DELAY_MS` (default 2000 ms) between sends. Slots 1–9: current-month reminders only (Phase 1). Slot 10: remainder + overdue/prior-month chase (Phase 2). The slot is inferred from WIB clock time or passed explicitly. Already-`SENT` rows are skipped, so slots dedupe naturally. Constants in [lib/constants.ts](lib/constants.ts).
 4. **`reconcile-payments`** (daily, 22:00 WIB) — polls Midtrans for unpaid invoices (6+ hours old) that opened checkout, syncing `PAID` and sending confirmation when the webhook was missed.
 5. **`promote-grades`** (June 30 24:00 UTC = July 1 07:00 WIB, yearly) — advances all `ACTIVE`/`TEMPORARY_LEAVE` student grades via the `promote_grades_annual` RPC. Idempotent per year (`already_promoted: true` on re-run); only runs in July WIB unless forced with an explicit `promotionYear`.
+6. **`sync-leave-status`** (daily, 00:15 WIB) — enforces the status invariant *`TEMPORARY_LEAVE` iff a `temporary_leaves` row exists for the current WIB month*: marks `ACTIVE` students with a current-month leave, reverts `TEMPORARY_LEAVE` students without one. Never touches `INACTIVE`. Display/KPI hygiene only — billing reads leave rows directly, not the status field.
 
 ## Payment link lifecycle
 

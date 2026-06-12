@@ -1,7 +1,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase/admin"
 import { Errors } from "@/lib/errors"
-import { todayInCenterTimezone } from "@/lib/utils"
+import { todayInCenterTimezone, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { gradeToSchoolLevel } from "@/lib/billing/grades"
 import {
   getCurrentLeaveStreakPeriod,
@@ -25,6 +25,8 @@ import type {
   LeaveReviewAlert,
   LeaveReviewListResult,
   LeaveReviewStudent,
+  SetLeaveBulkResult,
+  BulkLeaveUnpaidInvoice,
 } from "./types"
 
 type StudentSupabase = Awaited<ReturnType<typeof createSupabaseServerClient>>
@@ -335,11 +337,15 @@ export const studentService = {
       throw Errors.INTERNAL(error.message)
     }
 
-    await supabase
-      .from("students")
-      .update({ status: "TEMPORARY_LEAVE" })
-      .eq("id", studentId)
-      .eq("status", "ACTIVE")
+    // Status reflects the current WIB month only; future/past leaves don't change it.
+    const { month: currentMonth, year: currentYear } = currentMonthYearInCenterTimezone()
+    if (month === currentMonth && year === currentYear) {
+      await supabase
+        .from("students")
+        .update({ status: "TEMPORARY_LEAVE" })
+        .eq("id", studentId)
+        .eq("status", "ACTIVE")
+    }
 
     return data as TemporaryLeave
   },
@@ -362,10 +368,15 @@ export const studentService = {
 
     if (error) throw Errors.INTERNAL(error.message)
 
+    // Revert to ACTIVE only when no leave remains for the current WIB month;
+    // historical rows are kept (leave-review streaks and history depend on them).
+    const { month, year } = currentMonthYearInCenterTimezone()
     const { count } = await supabase
       .from("temporary_leaves")
       .select("*", { count: "exact", head: true })
       .eq("student_id", leave.student_id)
+      .eq("month", month)
+      .eq("year", year)
 
     if (count === 0) {
       await supabase
@@ -373,6 +384,150 @@ export const studentService = {
         .update({ status: "ACTIVE" })
         .eq("id", leave.student_id)
         .eq("status", "TEMPORARY_LEAVE")
+    }
+  },
+
+  /**
+   * Records the same leave month for many students at once. Students who
+   * already have a leave for that month are skipped, not failed.
+   */
+  async setLeaveBulk(
+    studentIds: string[],
+    month: number,
+    year: number,
+    reason?: string
+  ): Promise<SetLeaveBulkResult> {
+    const supabase = await createSupabaseServerClient()
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { data: eligible, error: eligibleError } = await supabase
+      .from("students")
+      .select("id")
+      .in("id", studentIds)
+      .in("status", ["ACTIVE", "TEMPORARY_LEAVE"])
+
+    if (eligibleError) throw Errors.INTERNAL(eligibleError.message)
+
+    const eligibleIds = (eligible ?? []).map((s) => s.id)
+    const skippedIneligible = studentIds.length - eligibleIds.length
+
+    if (eligibleIds.length === 0) {
+      return { created: 0, skipped_existing: 0, skipped_ineligible: skippedIneligible, unpaid_invoices: [] }
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from("temporary_leaves")
+      .upsert(
+        eligibleIds.map((id) => ({
+          student_id: id,
+          month,
+          year,
+          reason: reason ?? null,
+          created_by: user?.id ?? null,
+        })),
+        { onConflict: "student_id,month,year", ignoreDuplicates: true }
+      )
+      .select("student_id")
+
+    if (insertError) throw Errors.INTERNAL(insertError.message)
+
+    const created = inserted?.length ?? 0
+
+    const { month: currentMonth, year: currentYear } = currentMonthYearInCenterTimezone()
+    if (month === currentMonth && year === currentYear) {
+      await supabase
+        .from("students")
+        .update({ status: "TEMPORARY_LEAVE" })
+        .in("id", eligibleIds)
+        .eq("status", "ACTIVE")
+    }
+
+    const { data: unpaidRows } = await supabase
+      .from("invoices")
+      .select("id, student_id, amount, status, students(full_name)")
+      .eq("month", month)
+      .eq("year", year)
+      .in("student_id", eligibleIds)
+      .in("status", ["PENDING", "OVERDUE"])
+
+    const unpaidInvoices: BulkLeaveUnpaidInvoice[] = (unpaidRows ?? []).map((row) => ({
+      invoice_id: row.id,
+      student_id: row.student_id,
+      student_name: (row.students as unknown as { full_name: string } | null)?.full_name ?? "",
+      amount: row.amount,
+      status: row.status as BulkLeaveUnpaidInvoice["status"],
+    }))
+
+    return {
+      created,
+      skipped_existing: eligibleIds.length - created,
+      skipped_ineligible: skippedIneligible,
+      unpaid_invoices: unpaidInvoices,
+    }
+  },
+
+  /**
+   * Daily cron sync: status is TEMPORARY_LEAVE iff a leave row exists for the
+   * current WIB month. INACTIVE students are never touched. Idempotent.
+   */
+  async syncLeaveStatuses(): Promise<{
+    month: number
+    year: number
+    marked_on_leave: number
+    reactivated: number
+  }> {
+    const { month, year } = currentMonthYearInCenterTimezone()
+
+    const { data: leaves, error: leavesError } = await supabaseAdmin
+      .from("temporary_leaves")
+      .select("student_id")
+      .eq("month", month)
+      .eq("year", year)
+
+    if (leavesError) throw Errors.INTERNAL(leavesError.message)
+
+    const onLeaveIds = [...new Set((leaves ?? []).map((l) => l.student_id))]
+
+    let markedOnLeave = 0
+    if (onLeaveIds.length > 0) {
+      const { data, error } = await supabaseAdmin
+        .from("students")
+        .update({ status: "TEMPORARY_LEAVE" })
+        .eq("status", "ACTIVE")
+        .in("id", onLeaveIds)
+        .select("id")
+
+      if (error) throw Errors.INTERNAL(error.message)
+      markedOnLeave = data?.length ?? 0
+    }
+
+    let reactivateQuery = supabaseAdmin
+      .from("students")
+      .update({ status: "ACTIVE" })
+      .eq("status", "TEMPORARY_LEAVE")
+
+    if (onLeaveIds.length > 0) {
+      // UUID list goes into the PostgREST query string — fine at single-center
+      // scale (tens of concurrent leaves), revisit if that assumption breaks.
+      reactivateQuery = reactivateQuery.not(
+        "id",
+        "in",
+        `(${onLeaveIds.map((id) => `"${id}"`).join(",")})`
+      )
+    }
+
+    const { data: reactivatedRows, error: reactivateError } = await reactivateQuery.select("id")
+
+    if (reactivateError) throw Errors.INTERNAL(reactivateError.message)
+
+    return {
+      month,
+      year,
+      marked_on_leave: markedOnLeave,
+      reactivated: reactivatedRows?.length ?? 0,
     }
   },
 

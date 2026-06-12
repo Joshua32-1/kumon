@@ -119,6 +119,28 @@ export interface SetLeaveInput {
   reason?: string
 }
 
+export interface SetLeaveBulkInput {
+  student_ids: string[]
+  month: number
+  year: number
+  reason?: string
+}
+
+export interface BulkLeaveUnpaidInvoice {
+  invoice_id: string
+  student_id: string
+  student_name: string
+  amount: number
+  status: "PENDING" | "OVERDUE"
+}
+
+export interface SetLeaveBulkResult {
+  created: number
+  skipped_existing: number
+  skipped_ineligible: number
+  unpaid_invoices: BulkLeaveUnpaidInvoice[]
+}
+
 export interface PromoteGradesResult {
   promotion_year: number
   already_promoted: boolean

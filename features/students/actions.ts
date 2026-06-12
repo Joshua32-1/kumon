@@ -8,12 +8,14 @@ import {
   updateEnrollmentSchema,
   updateContactSchema,
   setLeaveSchema,
+  setLeaveBulkSchema,
 } from "./validations"
 import type {
   CreateStudentInput,
   UpdateStudentInput,
   UpdateEnrollmentInput,
   UpdateContactInput,
+  SetLeaveBulkInput,
 } from "./types"
 
 export async function createStudentAction(input: CreateStudentInput) {
@@ -86,6 +88,24 @@ export async function setLeaveAction(
   const leave = await studentService.setLeave(studentId, month, year, reason)
   revalidatePath(`/students/${studentId}`)
   return { data: leave }
+}
+
+export async function setLeaveBulkAction(input: SetLeaveBulkInput) {
+  const parsed = setLeaveBulkSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  const result = await studentService.setLeaveBulk(
+    parsed.data.student_ids,
+    parsed.data.month,
+    parsed.data.year,
+    parsed.data.reason
+  )
+  revalidatePath("/students")
+  for (const studentId of parsed.data.student_ids) {
+    revalidatePath(`/students/${studentId}`)
+  }
+  return { data: result }
 }
 
 export async function cancelLeaveAction(leaveId: string, studentId: string) {
