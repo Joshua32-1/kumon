@@ -1137,6 +1137,16 @@ export const paymentService = {
       inv.month,
       inv.year
     ).map((s) => s.subject)
+
+    // No billable subjects -> an invoice must not exist for this period. Refuse the recalc
+    // (leaving the current invoice untouched) instead of rewriting it to a 0-amount,
+    // line-item-less, unpayable invoice.
+    if (billableSubjects.length === 0) {
+      throw Errors.BAD_REQUEST(
+        "Tidak dapat menghitung ulang: siswa tidak memiliki mata pelajaran yang ditagih untuk periode ini."
+      )
+    }
+
     const { lines, total } = computeInvoiceLineItems(schoolLevel, billableSubjects, feeConfig)
 
     await invalidateMidtransOrder(inv.midtrans_order_id)

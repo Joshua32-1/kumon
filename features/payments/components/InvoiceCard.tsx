@@ -103,7 +103,9 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
       setRegenerateOpen(false)
       onUpdate?.()
     } else {
-      toast.error("Gagal menghitung ulang tagihan.")
+      toast.error(
+        "error" in result && result.error ? result.error : "Gagal menghitung ulang tagihan."
+      )
     }
   }
 

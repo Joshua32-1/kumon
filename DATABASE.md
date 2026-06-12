@@ -15,6 +15,8 @@ Verify `0006`: `SELECT conname FROM pg_constraint WHERE conname IN ('invoices_am
 
 `0007` atomic invoice writes — `create_invoice_with_lines(p_invoice jsonb, p_lines jsonb, p_reminder_days int[]) → uuid` and `regenerate_invoice_lines(p_invoice_id uuid, p_amount int, p_school_level school_level, p_lines jsonb) → void`, both `SECURITY DEFINER`, so invoice + line items (+ reminders) are written in one transaction instead of separate PostgREST calls. Verify: `SELECT proname FROM pg_proc WHERE proname IN ('create_invoice_with_lines','regenerate_invoice_lines');` should return 2 rows.
 
+`0008` require ≥1 line item — both RPCs above (`CREATE OR REPLACE`) now raise `check_violation` when `p_lines` is empty, so a student with no billable subjects can never get an invoice (and therefore no reminders). Verify: `SELECT create_invoice_with_lines('{}'::jsonb, '[]'::jsonb, '{}'::int[]);` should error with "invoice must have at least one line item".
+
 ## Enums
 
 | Enum | Values | Notes |
