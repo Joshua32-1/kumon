@@ -462,6 +462,26 @@ async function markPriorInvoicesOverdue(
   return data?.length ?? 0
 }
 
+/**
+ * Called when a guarded status transition (markPaid/waive) updated zero rows.
+ * Disambiguates a missing invoice (404) from a disallowed transition (400).
+ * Always throws.
+ */
+async function assertInvoiceTransitionFailure(
+  supabase: SupabaseClient | typeof supabaseAdmin,
+  invoiceId: string,
+  badStatusMessage: string
+): Promise<never> {
+  const { data: existing } = await supabase
+    .from("invoices")
+    .select("id")
+    .eq("id", invoiceId)
+    .maybeSingle()
+
+  if (!existing) throw Errors.INVOICE_NOT_FOUND()
+  throw Errors.BAD_REQUEST(badStatusMessage)
+}
+
 export const paymentService = {
   async list(filters: PaymentFilters = {}): Promise<InvoiceWithStudent[]> {
     const supabase = await createSupabaseServerClient()
@@ -761,41 +781,38 @@ export const paymentService = {
       }
     }
 
-    // Insert invoices
-    const { data: inserted, error } = await supabase
-      .from("invoices")
-      .insert(invoicesWithLines.map(({ lines: _lines, ...inv }) => inv))
-      .select("id, student_id")
-
-    if (error) throw Errors.INTERNAL(error.message)
-
-    const invoiceIds = (inserted ?? []).map((i) => i.id)
-
-    // Insert line items for each inserted invoice
-    for (const inv of inserted ?? []) {
-      const match = invoicesWithLines.find((i) => i.student_id === inv.student_id)
-      if (!match) continue
-      await supabase.from("invoice_line_items").insert(
-        match.lines.map((line) => ({
-          invoice_id: inv.id,
-          subject: line.subject,
-          label: line.label,
-          unit_amount: line.unit_amount,
-        }))
-      )
-    }
-
     const reminderDays = await loadReminderDays(supabase)
 
-    for (const invoice of inserted ?? []) {
-      await paymentService.scheduleReminders(
-        invoice.id,
-        invoice.student_id,
-        month,
-        year,
-        reminderDays,
-        supabase
-      )
+    // Insert each invoice + its line items + its reminders atomically (RPC = one transaction),
+    // so a mid-flow failure can never leave an invoice without its line items or reminders.
+    const invoiceIds: string[] = []
+    for (const { lines, ...inv } of invoicesWithLines) {
+      const { data: newId, error } = await supabase.rpc("create_invoice_with_lines", {
+        p_invoice: {
+          student_id: inv.student_id,
+          month: inv.month,
+          year: inv.year,
+          amount: inv.amount,
+          due_date: inv.due_date,
+          created_by: inv.created_by,
+          school_level_at_billing: inv.school_level_at_billing,
+          payment_access_token: inv.payment_access_token,
+        },
+        p_lines: lines,
+        p_reminder_days: reminderDays,
+      })
+
+      if (error) {
+        // 23505 = unique_violation: an active invoice for this student/month/year already
+        // exists (e.g. a concurrent run won the race). Skip rather than fail the whole batch.
+        if (error.code === "23505") {
+          skippedExisting++
+          continue
+        }
+        throw Errors.INTERNAL(error.message)
+      }
+
+      if (newId) invoiceIds.push(newId as string)
     }
 
     return {
@@ -1079,7 +1096,9 @@ export const paymentService = {
     return byHistory ? (byHistory as Invoice) : null
   },
 
-  async regenerateInvoice(invoiceId: string): Promise<{ paymentUrl: string }> {
+  async regenerateInvoice(
+    invoiceId: string
+  ): Promise<{ paymentUrl: string; notified: boolean; notifyError?: string }> {
     const supabase = await createSupabaseServerClient()
 
     const { data: invoice, error } = await supabase
@@ -1122,32 +1141,115 @@ export const paymentService = {
 
     await invalidateMidtransOrder(inv.midtrans_order_id)
 
-    await supabase.from("invoice_line_items").delete().eq("invoice_id", invoiceId)
-
-    if (lines.length > 0) {
-      await supabase.from("invoice_line_items").insert(
-        lines.map((line) => ({
-          invoice_id: invoiceId,
-          subject: line.subject,
-          label: line.label,
-          unit_amount: line.unit_amount,
-        }))
-      )
-    }
-
-    await supabase
-      .from("invoices")
-      .update({
-        amount: total,
-        school_level_at_billing: schoolLevel,
-        midtrans_payment_url: null,
-        midtrans_order_id: null,
-        midtrans_snap_created_at: null,
-      })
-      .eq("id", invoiceId)
+    // Replace line items + amount atomically so a failure can't leave the invoice with a
+    // stale amount and no (or partial) line items.
+    const { error: regenError } = await supabase.rpc("regenerate_invoice_lines", {
+      p_invoice_id: invoiceId,
+      p_amount: total,
+      p_school_level: schoolLevel,
+      p_lines: lines.map((l) => ({
+        subject: l.subject,
+        label: l.label,
+        unit_amount: l.unit_amount,
+      })),
+    })
+    if (regenError) throw Errors.INTERNAL(regenError.message)
 
     const paymentUrl = await paymentService.getPaymentLink(invoiceId)
-    return { paymentUrl }
+
+    // Always re-notify the parent: the recalc changes the amount + invalidates the old pay
+    // link, but their last WhatsApp still shows the previous amount. A send failure must not
+    // fail the recalc itself (matches the webhook-confirmation pattern).
+    let notified = false
+    let notifyError: string | undefined
+    try {
+      const res = await paymentService.sendUpdatedInvoiceNotification(invoiceId)
+      notified = res.ok
+      notifyError = res.error
+    } catch (err) {
+      notifyError = String(err)
+    }
+
+    return { paymentUrl, notified, notifyError }
+  },
+
+  /**
+   * Push the corrected amount + current pay link to the parent after a recalc.
+   * Reuses the reminder template and records a SENT audit row. Never throws on a
+   * send failure — the caller decides what to do with the result.
+   */
+  async sendUpdatedInvoiceNotification(
+    invoiceId: string
+  ): Promise<{ ok: boolean; error?: string }> {
+    const { data: invRow } = await supabaseAdmin
+      .from("invoices")
+      .select(
+        "*, invoice_line_items(*), students(full_name, school_level, status, contacts(id, student_id, full_name, relationship, whatsapp_number, is_primary, created_at, updated_at))"
+      )
+      .eq("id", invoiceId)
+      .single()
+
+    if (!invRow) return { ok: false, error: "Invoice not found" }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inv = invRow as any
+    const invoice = inv as Invoice
+    const student = inv.students
+
+    if (!student) return { ok: false, error: "Student not found" }
+    if (student.status === "INACTIVE") return { ok: false, error: "Student inactive" }
+    if (invoice.status !== "PENDING" && invoice.status !== "OVERDUE") {
+      return { ok: false, error: `Invoice ${invoice.status}` }
+    }
+
+    const contacts = (student.contacts ?? []) as Contact[]
+    const primaryContact = contacts.find((c: Contact) => c.is_primary) ?? contacts[0]
+    if (!primaryContact?.whatsapp_number) {
+      return { ok: false, error: "No WhatsApp contact" }
+    }
+
+    let paymentUrl: string
+    try {
+      paymentUrl = await paymentService.getPaymentLink(invoiceId)
+    } catch (err) {
+      return { ok: false, error: `Failed to build payment link: ${String(err)}` }
+    }
+
+    const lineItems = inv.invoice_line_items ?? []
+
+    const { data: maxRow } = await supabaseAdmin
+      .from("payment_reminders")
+      .select("reminder_number")
+      .eq("invoice_id", invoiceId)
+      .order("reminder_number", { ascending: false })
+      .limit(1)
+    const nextNumber = (maxRow?.[0]?.reminder_number ?? 0) + 1
+
+    const sendResult = await messagingService.sendPaymentReminder(
+      invoice,
+      primaryContact,
+      nextNumber,
+      paymentUrl,
+      lineItems,
+      paymentWhatsAppContext(student, invoice)
+    )
+
+    if (!sendResult.success) {
+      return { ok: false, error: sendResult.error ?? "WhatsApp send failed" }
+    }
+
+    await supabaseAdmin.from("payment_reminders").insert({
+      invoice_id: invoiceId,
+      student_id: invoice.student_id,
+      reminder_number: nextNumber,
+      scheduled_date: todayInCenterTimezone(),
+      status: "SENT" as const,
+      sent_at: new Date().toISOString(),
+      whatsapp_number: primaryContact.whatsapp_number,
+      message_preview: "[admin] Tagihan diperbarui — jumlah & link baru",
+    })
+
+    return { ok: true }
   },
 
   /**
@@ -1886,14 +1988,28 @@ export const paymentService = {
   async markPaid(invoiceId: string): Promise<Invoice> {
     const supabase = await createSupabaseServerClient()
 
+    // Atomic guard: only an unpaid invoice can be marked paid. The status filter
+    // lives in the UPDATE itself so a concurrent transition cannot slip a final
+    // invoice (CANCELLED/WAIVED/PAID) back to PAID via a check-then-write race.
     const { data, error } = await supabase
       .from("invoices")
       .update({ status: "PAID", paid_at: new Date().toISOString() })
       .eq("id", invoiceId)
+      // Only an unpaid invoice can be marked paid. PAID_OLD_LINK is intentionally
+      // excluded: that reconciliation goes through the settlement/reconcile path,
+      // and flipping it to PAID here can collide with the active-invoice unique
+      // index when a regenerated invoice exists for the same period.
+      .in("status", ["PENDING", "OVERDUE"])
       .select()
       .single()
 
-    if (error || !data) throw Errors.INVOICE_NOT_FOUND()
+    if (error || !data) {
+      await assertInvoiceTransitionFailure(
+        supabase,
+        invoiceId,
+        "Hanya tagihan belum lunas yang dapat ditandai lunas."
+      )
+    }
 
     await cancelPendingReminders(invoiceId, "Tagihan sudah lunas", supabase)
 
@@ -1903,14 +2019,23 @@ export const paymentService = {
   async waive(invoiceId: string, notes: string): Promise<Invoice> {
     const supabase = await createSupabaseServerClient()
 
+    // Atomic guard: a paid/cancelled invoice must not be waived. Filtering on
+    // the current status inside the UPDATE keeps the transition race-free.
     const { data, error } = await supabase
       .from("invoices")
       .update({ status: "WAIVED", notes })
       .eq("id", invoiceId)
+      .in("status", ["PENDING", "OVERDUE"])
       .select()
       .single()
 
-    if (error || !data) throw Errors.INVOICE_NOT_FOUND()
+    if (error || !data) {
+      await assertInvoiceTransitionFailure(
+        supabase,
+        invoiceId,
+        "Hanya tagihan belum lunas yang dapat dibebaskan."
+      )
+    }
 
     await cancelPendingReminders(invoiceId, "Tagihan dibebaskan", supabase)
 

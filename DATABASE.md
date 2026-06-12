@@ -9,7 +9,11 @@ Schema reference for the Supabase Postgres database. Source of truth: [supabase/
 - After any schema change: `npx supabase gen types typescript --project-id <id> > types/database.ts`, then `npx tsc --noEmit`.
 - See `.claude/skills/supabase-migrations/SKILL.md` for full conventions.
 
-Current migrations: `0001` initial schema (enums, tables, RLS, config seeds) · `0002` `promote_grades_annual` RPC · `0003` stable pay tokens · `0004` cron job toggles seed · `0005` historical fee schedule seed.
+Current migrations: `0001` initial schema (enums, tables, RLS, config seeds) · `0002` `promote_grades_annual` RPC · `0003` stable pay tokens · `0004` cron job toggles seed · `0005` historical fee schedule seed · `0006` integrity CHECK constraints (non-negative `invoices.amount`/`invoice_line_items.unit_amount`, `year` 2000–2100 on `invoices`/`temporary_leaves`, `payment_reminders.reminder_number >= 1`, non-blank `full_name` on `students`/`contacts`).
+
+Verify `0006`: `SELECT conname FROM pg_constraint WHERE conname IN ('invoices_amount_nonneg','invoice_line_items_unit_amount_nonneg','invoices_year_range','temporary_leaves_year_range','payment_reminders_number_positive','students_full_name_not_blank','contacts_full_name_not_blank');` should return 7 rows.
+
+`0007` atomic invoice writes — `create_invoice_with_lines(p_invoice jsonb, p_lines jsonb, p_reminder_days int[]) → uuid` and `regenerate_invoice_lines(p_invoice_id uuid, p_amount int, p_school_level school_level, p_lines jsonb) → void`, both `SECURITY DEFINER`, so invoice + line items (+ reminders) are written in one transaction instead of separate PostgREST calls. Verify: `SELECT proname FROM pg_proc WHERE proname IN ('create_invoice_with_lines','regenerate_invoice_lines');` should return 2 rows.
 
 ## Enums
 
@@ -93,6 +97,8 @@ Singleton settings as JSONB rows — prefer a new key here over a new one-row ta
 ## Functions and triggers
 
 - **`promote_grades_annual(p_promotion_year INTEGER) → JSONB`** (0002) — advances `ACTIVE`/`TEMPORARY_LEAVE` grades one step (TK 1 → … → SMA 3; SMA 3 unchanged), updates `school_level`, records the year in `grade_promotion`. Locks the config row (`FOR UPDATE`) and returns `{already_promoted: true, …}` if the year was already done. `SECURITY DEFINER SET search_path = public`.
+- **`create_invoice_with_lines(p_invoice JSONB, p_lines JSONB, p_reminder_days INT[]) → UUID`** (0007) — inserts one invoice, its line items, and (when the student has a primary contact) its reminders in a single transaction; raises `unique_violation` on a duplicate active invoice. Fee/enrollment logic stays in TS; this only persists the precomputed payload. Used by `generateMonthly*`. `SECURITY DEFINER SET search_path = public`.
+- **`regenerate_invoice_lines(p_invoice_id UUID, p_amount INT, p_school_level school_level, p_lines JSONB) → VOID`** (0007) — atomically replaces an invoice's line items + amount and nulls its Midtrans session fields (recalc). Used by `regenerateInvoice`. `SECURITY DEFINER`.
 - **`update_updated_at()`** — trigger on `students`, `contacts`, `invoices` setting `updated_at = NOW()` on update.
 
 ## Row Level Security

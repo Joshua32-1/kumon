@@ -89,7 +89,17 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
     setIsProcessing(false)
     if ("data" in result && result.data?.paymentUrl) {
       navigator.clipboard.writeText(result.data.paymentUrl)
-      toast.success("Tagihan dihitung ulang. Link baru disalin ke clipboard.")
+      if (result.data.notified) {
+        toast.success(
+          "Tagihan dihitung ulang & WhatsApp terbaru terkirim. Link baru disalin ke clipboard."
+        )
+      } else {
+        // Recalc succeeded but the parent was NOT re-notified — surface it so the
+        // admin knows the parent still has the old amount.
+        toast.warning(
+          "Tagihan dihitung ulang (link disalin), tetapi WhatsApp terbaru GAGAL terkirim — kirim manual."
+        )
+      }
       setRegenerateOpen(false)
       onUpdate?.()
     } else {
