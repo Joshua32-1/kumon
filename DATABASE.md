@@ -102,7 +102,6 @@ Singleton settings as JSONB rows — prefer a new key here over a new one-row ta
 | `center_name` | `{name: …}` | |
 | `cron_jobs` | `{generate_invoices: {enabled}, backfill_payment_links, send_reminders, reconcile_payments, promote_grades, sync_leave_status, mark_overdue}` | Per-job toggles read by [lib/cron/enabled.ts](lib/cron/enabled.ts), edited from Settings. Ids missing from the stored value default to enabled (`parseCronJobsConfig`), so new jobs need no reseed |
 | `grade_promotion` | `{year: 2025 \| null}` | Last completed promotion year — the RPC's idempotency latch |
-| `whatsapp_provider` | `{provider: …}` | Legacy seed; the active provider is configured via `META_*` env vars |
 
 ## Functions and triggers
 

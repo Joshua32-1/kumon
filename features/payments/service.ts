@@ -1705,7 +1705,7 @@ export const paymentService = {
       .eq("id", reminderId)
   },
 
-  /** Mark a reminder row as manually sent without going through Fonnte. */
+  /** Mark a reminder row as manually sent without going through the messaging provider. */
   async markReminderSentManually(
     reminderId: string,
     note?: string
