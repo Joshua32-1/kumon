@@ -125,6 +125,10 @@ export interface GenerateResult {
   marked_overdue: number
 }
 
+export interface MarkOverdueResult {
+  marked: number
+}
+
 export interface BackfillLinksResult extends CheckoutLinksResult {
   attempted: number
   month?: number

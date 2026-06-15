@@ -7,6 +7,7 @@ export const CRON_JOB_IDS = [
   "reconcile_payments",
   "promote_grades",
   "sync_leave_status",
+  "mark_overdue",
 ] as const
 
 export type CronJobId = (typeof CRON_JOB_IDS)[number]
@@ -54,6 +55,12 @@ export const CRON_JOBS: CronJobDefinition[] = [
     label: "Sinkronisasi Status Cuti",
     description: "Memperbarui status siswa (Aktif/Cuti) sesuai catatan cuti bulan berjalan.",
     schedule: "Setiap hari, 00:15 WIB",
+  },
+  {
+    id: "mark_overdue",
+    label: "Tandai Tagihan Terlambat",
+    description: "Menandai tagihan yang sudah melewati jatuh tempo dan belum dibayar sebagai terlambat.",
+    schedule: "Setiap hari, 00:30 WIB",
   },
 ]
 
