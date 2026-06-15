@@ -6,6 +6,7 @@ import {
   generateMonthlySchema,
   generateCandidatesSchema,
   sendPaymentLinksSchema,
+  resolvePaidLeaveConflictSchema,
 } from "./validations"
 import type { GenerateMonthlyInput } from "./types"
 import { AppError } from "@/lib/errors"
@@ -111,6 +112,22 @@ export async function reconcileMidtransAction(invoiceId: string) {
   revalidatePath(`/payments/${invoiceId}`)
   revalidatePath("/students")
   return result
+}
+
+export async function resolvePaidLeaveConflictAction(invoiceId: string) {
+  const parsed = resolvePaidLeaveConflictSchema.safeParse({ invoice_id: invoiceId })
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+  try {
+    await paymentService.resolvePaidLeaveConflict(parsed.data.invoice_id, parsed.data.note)
+  } catch (err) {
+    return {
+      error: err instanceof AppError ? err.message : "Gagal menandai konflik selesai.",
+    }
+  }
+  revalidatePath("/")
+  return { data: true }
 }
 
 export async function listPaymentLinkSendCandidatesAction(input: {

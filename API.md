@@ -26,8 +26,8 @@ Unauthenticated requests are redirected to `/login` by [proxy.ts](proxy.ts).
 | `GET /api/students/{id}` | Student detail | |
 | `PATCH /api/students/{id}` | Polymorphic update — body shape selects the operation | `{subjects: …}` → update enrollment · `{contact: …}` → update primary contact · otherwise `updateStudentSchema` → update student fields |
 | `DELETE /api/students/{id}` | **Deactivate** (soft — sets `INACTIVE`), not a hard delete | |
-| `POST /api/students/{id}/leave` | Set a temporary-leave month | Body: `{month, year, reason?}` → 201 |
-| `DELETE /api/students/{id}/leave/{leaveId}` | Cancel a leave month | |
+| `POST /api/students/{id}/leave` | Set a temporary-leave month; cancels that month's unpaid invoice unless `cancel_unpaid_invoices: false` | Body: `{month, year, reason?, cancel_unpaid_invoices? = true}` → 201 `{leave, cancelled_invoices, failed_invoices, cancel_error}` (leave is the source of truth: invoice-cancellation failure sets `cancel_error: true`, not an error status) |
+| `DELETE /api/students/{id}/leave/{leaveId}` | Cancel a leave month; pass `?regenerate_invoice=true` to rebill the month (current/future only) | → `{leaveId, month, year, regenerated_invoice_id, regenerate_skipped_reason, regenerate_error}` |
 | `GET /api/students/billing` | Invoice-first map `studentId → {invoice, reminders, summary, onLeave}` for a billing month | Query: `month`, `year` (default: current WIB month) |
 | `GET /api/students/leave-review` | Students whose consecutive-leave streak hit the `max_leave_months` threshold | |
 

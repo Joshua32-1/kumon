@@ -9,6 +9,7 @@ import { StudentStatusBadge } from "@/features/students/components/StudentStatus
 import { LeaveReviewBadge } from "@/features/students/components/LeaveReviewBadge"
 import { leaveReviewSummary } from "@/lib/billing/leave-review-label"
 import { LeaveDialog } from "@/features/students/components/LeaveDialog"
+import { CancelLeaveDialog } from "@/features/students/components/CancelLeaveDialog"
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -67,6 +68,11 @@ export default function StudentDetailPage({ params }: PageProps) {
   const { data: student, isLoading, mutate } = useSWR(`/api/students/${id}`, fetcher)
 
   const [leaveOpen, setLeaveOpen] = useState(false)
+  const [cancelLeaveTarget, setCancelLeaveTarget] = useState<{
+    id: string
+    month: number
+    year: number
+  } | null>(null)
   const [deactivateOpen, setDeactivateOpen] = useState(false)
   const [reactivateOpen, setReactivateOpen] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -233,12 +239,6 @@ export default function StudentDetailPage({ params }: PageProps) {
     toast.success("Siswa diaktifkan kembali.")
     setIsProcessing(false)
     setReactivateOpen(false)
-    mutate()
-  }
-
-  async function handleCancelLeave(leaveId: string) {
-    await cancelLeaveAction(leaveId, id)
-    toast.success("Cuti dibatalkan.")
     mutate()
   }
 
@@ -557,7 +557,7 @@ export default function StudentDetailPage({ params }: PageProps) {
                   variant="ghost"
                   size="sm"
                   className="text-destructive hover:text-destructive text-xs"
-                  onClick={() => handleCancelLeave(leave.id)}
+                  onClick={() => setCancelLeaveTarget(leave)}
                 >
                   Batalkan
                 </Button>
@@ -690,6 +690,13 @@ export default function StudentDetailPage({ params }: PageProps) {
         studentId={id}
         open={leaveOpen}
         onOpenChange={(o) => { setLeaveOpen(o); if (!o) mutate() }}
+      />
+      <CancelLeaveDialog
+        studentId={id}
+        leave={cancelLeaveTarget}
+        open={cancelLeaveTarget !== null}
+        onOpenChange={(o) => { if (!o) setCancelLeaveTarget(null) }}
+        onDone={() => { mutate(); mutateBilling() }}
       />
       <ConfirmDialog
         open={deactivateOpen}

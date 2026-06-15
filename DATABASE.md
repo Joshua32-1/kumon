@@ -19,6 +19,8 @@ Verify `0006`: `SELECT conname FROM pg_constraint WHERE conname IN ('invoices_am
 
 `0009` promote-grades year guard — `CREATE OR REPLACE promote_grades_annual` rejects `p_promotion_year` outside `[2020 .. current WIB year]`. Verify: `SELECT promote_grades_annual(EXTRACT(YEAR FROM now() AT TIME ZONE 'Asia/Jakarta')::int + 1);` should error "invalid promotion year".
 
+`0010` paid-leave conflict resolutions — new `paid_leave_conflict_resolutions` table backing the dashboard "Tagihan sudah dibayar untuk bulan cuti" panel. A PAID invoice whose billing month also has a `temporary_leaves` row is a conflict, shown all-time (no month window) until an admin clicks "Tandai selesai" (one resolution row per invoice) or the cuti is cancelled. Verify: `SELECT count(*) FROM pg_policies WHERE tablename = 'paid_leave_conflict_resolutions' AND policyname = 'admin_all';` should return 1.
+
 ## Enums
 
 | Enum | Values | Notes |
@@ -55,6 +57,9 @@ Parent/guardian WhatsApp contacts. FK `student_id` → students (CASCADE). Colum
 One row per student per month on leave. FK `student_id` (CASCADE), `month` (1–12 CHECK), `year`, `reason`, `created_by` → `auth.users`.
 Unique `(student_id, month, year)`. A row here makes the student non-billable for that month. Consecutive-month streaks against the `max_leave_months` config drive the leave-review alerts.
 `students.status = TEMPORARY_LEAVE` is derived from these rows: it means "has a leave row for the current WIB month" and is kept in sync on write (`setLeave`/`setLeaveBulk`/`cancelLeave`) plus nightly by the `sync-leave-status` cron. Billing never reads the status field — these rows are the source of truth.
+
+### paid_leave_conflict_resolutions
+One row per resolved paid-leave conflict. FK `invoice_id` (CASCADE, **UNIQUE** — doubles as the lookup index), `note`, `created_by` → `auth.users`, `created_at` (= resolution time; rows are immutable). A PAID invoice whose `(student, month, year)` matches a `temporary_leaves` row is a conflict (`listPaidLeaveConflicts`); inserting a row here ("Tandai selesai") removes it from the dashboard panel. Resolutions are **permanent per invoice** — re-recording then re-cancelling a cuti for the same paid invoice will not resurface it. Idempotent: a duplicate insert (already resolved) is swallowed via the `23505` unique violation.
 
 ### student_subjects
 Enrollment per subject. FK `student_id` (CASCADE), `subject` (`kumon_subject`), `enrolled_at`. Unique `(student_id, subject)`. Students with zero rows are skipped at invoice generation.

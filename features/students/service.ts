@@ -350,12 +350,14 @@ export const studentService = {
     return data as TemporaryLeave
   },
 
-  async cancelLeave(leaveId: string): Promise<void> {
+  async cancelLeave(
+    leaveId: string
+  ): Promise<{ student_id: string; month: number; year: number }> {
     const supabase = await createSupabaseServerClient()
 
     const { data: leave, error: fetchError } = await supabase
       .from("temporary_leaves")
-      .select("student_id")
+      .select("student_id, month, year")
       .eq("id", leaveId)
       .single()
 
@@ -385,6 +387,10 @@ export const studentService = {
         .eq("id", leave.student_id)
         .eq("status", "TEMPORARY_LEAVE")
     }
+
+    // The leave period comes from the DB row, not the caller — the action layer
+    // uses it for invoice regeneration and must not trust client month/year.
+    return { student_id: leave.student_id, month: leave.month, year: leave.year }
   },
 
   /**
@@ -415,7 +421,14 @@ export const studentService = {
     const skippedIneligible = studentIds.length - eligibleIds.length
 
     if (eligibleIds.length === 0) {
-      return { created: 0, skipped_existing: 0, skipped_ineligible: skippedIneligible, unpaid_invoices: [] }
+      return {
+        created: 0,
+        skipped_existing: 0,
+        skipped_ineligible: skippedIneligible,
+        unpaid_invoices: [],
+        cancelled_invoices: [],
+        paid_invoices: [],
+      }
     }
 
     const { data: inserted, error: insertError } = await supabase
@@ -445,15 +458,15 @@ export const studentService = {
         .eq("status", "ACTIVE")
     }
 
-    const { data: unpaidRows } = await supabase
+    const { data: invoiceRows } = await supabase
       .from("invoices")
       .select("id, student_id, amount, status, students(full_name)")
       .eq("month", month)
       .eq("year", year)
       .in("student_id", eligibleIds)
-      .in("status", ["PENDING", "OVERDUE"])
+      .in("status", ["PENDING", "OVERDUE", "PAID"])
 
-    const unpaidInvoices: BulkLeaveUnpaidInvoice[] = (unpaidRows ?? []).map((row) => ({
+    const reported: BulkLeaveUnpaidInvoice[] = (invoiceRows ?? []).map((row) => ({
       invoice_id: row.id,
       student_id: row.student_id,
       student_name: (row.students as unknown as { full_name: string } | null)?.full_name ?? "",
@@ -465,7 +478,10 @@ export const studentService = {
       created,
       skipped_existing: eligibleIds.length - created,
       skipped_ineligible: skippedIneligible,
-      unpaid_invoices: unpaidInvoices,
+      unpaid_invoices: reported.filter((inv) => inv.status !== "PAID"),
+      // Filled by the action when the admin opted into cancellation.
+      cancelled_invoices: [],
+      paid_invoices: reported.filter((inv) => inv.status === "PAID"),
     }
   },
 

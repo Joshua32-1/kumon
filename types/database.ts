@@ -187,6 +187,37 @@ export interface Database {
           }
         ]
       }
+      paid_leave_conflict_resolutions: {
+        Row: {
+          id: string
+          invoice_id: string
+          note: string | null
+          created_by: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          invoice_id: string
+          note?: string | null
+          created_by?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          invoice_id?: string
+          note?: string | null
+          created_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "paid_leave_conflict_resolutions_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: true
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       invoices: {
         Row: {
           id: string

@@ -52,6 +52,7 @@ export const setLeaveSchema = z.object({
   month: z.number().int().min(1).max(12),
   year: z.number().int().min(2020).max(2100),
   reason: z.string().optional(),
+  cancel_unpaid_invoices: z.boolean().optional().default(true),
 })
 
 export const setLeaveBulkSchema = setLeaveSchema.extend({
@@ -59,4 +60,8 @@ export const setLeaveBulkSchema = setLeaveSchema.extend({
     .array(z.string().uuid())
     .min(1, "Pilih minimal 1 siswa")
     .transform((ids) => [...new Set(ids)]),
+})
+
+export const cancelLeaveSchema = z.object({
+  regenerate_invoice: z.boolean().optional().default(false),
 })

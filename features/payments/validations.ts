@@ -28,3 +28,8 @@ export const updateInvoiceSchema = z.object({
   status: z.enum(["PENDING", "PAID", "OVERDUE", "CANCELLED", "WAIVED"]).optional(),
   notes: z.string().optional(),
 })
+
+export const resolvePaidLeaveConflictSchema = z.object({
+  invoice_id: z.string().uuid(),
+  note: z.string().optional(),
+})

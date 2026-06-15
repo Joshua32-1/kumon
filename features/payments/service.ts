@@ -57,6 +57,9 @@ import type {
   ReminderProcessResult,
   PaymentLinkSendCandidatesResult,
   SendPaymentLinksResult,
+  LeaveMonthInvoice,
+  LeaveInvoiceCancelResult,
+  PaidLeaveConflict,
 } from "./types"
 import {
   getWhatsAppDeliveryStatus,
@@ -907,6 +910,23 @@ export const paymentService = {
     }
 
     if (invoice.status === "CANCELLED") {
+      // Cancelled because of cuti? Tell the parent there's nothing to pay
+      // instead of the generic "contact the center" message.
+      const { count: leaveCount } = await supabaseAdmin
+        .from("temporary_leaves")
+        .select("*", { count: "exact", head: true })
+        .eq("student_id", invoice.student_id)
+        .eq("month", invoice.month)
+        .eq("year", invoice.year)
+
+      if ((leaveCount ?? 0) > 0) {
+        return {
+          kind: "message",
+          title: "Siswa sedang cuti",
+          body: "Siswa sedang cuti pada bulan ini, jadi tidak ada tagihan yang perlu dibayar. Hubungi pusat Kumon jika ada pertanyaan.",
+        }
+      }
+
       return {
         kind: "message",
         title: "Tagihan dibatalkan",
@@ -2042,6 +2062,9 @@ export const paymentService = {
 
     await invalidateMidtransOrder(inv.midtrans_order_id)
 
+    // Atomic guard: the status may have changed (e.g. webhook settlement to
+    // PAID) between the read above and this write — filtering on unpaid status
+    // inside the UPDATE keeps the transition race-free, like markPaid/waive.
     const { data, error } = await supabase
       .from("invoices")
       .update({
@@ -2050,13 +2073,186 @@ export const paymentService = {
         midtrans_snap_created_at: null,
       })
       .eq("id", invoiceId)
+      .in("status", ["PENDING", "OVERDUE"])
       .select()
       .single()
 
-    if (error || !data) throw Errors.INVOICE_NOT_FOUND()
+    if (error || !data) {
+      await assertInvoiceTransitionFailure(
+        supabase,
+        invoiceId,
+        "Hanya tagihan belum lunas yang dapat dibatalkan."
+      )
+    }
 
     await cancelPendingReminders(invoiceId, "Tagihan dibatalkan", supabase)
 
     return data as Invoice
+  },
+
+  /**
+   * Cancels PENDING/OVERDUE invoices for the given students' leave month.
+   * Called from the leave actions when the admin opts in (default-on checkbox).
+   * Per-invoice failures (e.g. paid in the race window, Midtrans error) are
+   * collected instead of failing the batch — those stay live for manual action.
+   */
+  async cancelUnpaidInvoicesForLeave(
+    studentIds: string[],
+    month: number,
+    year: number
+  ): Promise<LeaveInvoiceCancelResult> {
+    const supabase = await createSupabaseServerClient()
+
+    const { data: rows, error } = await supabase
+      .from("invoices")
+      .select("id, student_id, amount, status, students(full_name)")
+      .in("student_id", studentIds)
+      .eq("month", month)
+      .eq("year", year)
+      .in("status", ["PENDING", "OVERDUE"])
+
+    if (error) throw Errors.INTERNAL(error.message)
+
+    const targets: LeaveMonthInvoice[] = (rows ?? []).map((row) => ({
+      invoice_id: row.id,
+      student_id: row.student_id,
+      student_name:
+        (row.students as unknown as { full_name: string } | null)?.full_name ?? "",
+      amount: row.amount,
+      status: row.status as LeaveMonthInvoice["status"],
+    }))
+
+    const cancelled: LeaveMonthInvoice[] = []
+    const failed: LeaveMonthInvoice[] = []
+    for (const target of targets) {
+      try {
+        await paymentService.cancel(target.invoice_id)
+        cancelled.push(target)
+      } catch (err) {
+        console.error(
+          `cancelUnpaidInvoicesForLeave: failed to cancel invoice ${target.invoice_id}`,
+          err
+        )
+        failed.push(target)
+      }
+    }
+
+    return { cancelled, failed }
+  },
+
+  /** Current status for a set of invoice ids — reconciles race windows in bulk flows. */
+  async getInvoiceStatusesByIds(
+    invoiceIds: string[]
+  ): Promise<Array<{ invoice_id: string; status: PaymentStatus }>> {
+    if (invoiceIds.length === 0) return []
+    const supabase = await createSupabaseServerClient()
+
+    const { data, error } = await supabase
+      .from("invoices")
+      .select("id, status")
+      .in("id", invoiceIds)
+
+    if (error) throw Errors.INTERNAL(error.message)
+
+    return (data ?? []).map((row) => ({
+      invoice_id: row.id,
+      status: row.status as PaymentStatus,
+    }))
+  },
+
+  /**
+   * PAID invoices whose (student, month, year) also has a temporary_leaves row —
+   * the parent paid before cuti was recorded, so the admin needs to decide on a
+   * refund/credit. All-time: a conflict persists on the dashboard until the
+   * admin marks it handled ("Tandai selesai", persisted per invoice in
+   * paid_leave_conflict_resolutions) or the cuti is cancelled.
+   */
+  async listPaidLeaveConflicts(): Promise<PaidLeaveConflict[]> {
+    const supabase = await createSupabaseServerClient()
+
+    const { data: leaves, error: leavesError } = await supabase
+      .from("temporary_leaves")
+      .select("student_id, month, year")
+
+    if (leavesError) throw Errors.INTERNAL(leavesError.message)
+    if (!leaves || leaves.length === 0) return []
+
+    const leaveKeys = new Set(leaves.map((l) => `${l.student_id}:${l.month}:${l.year}`))
+    const studentIds = [...new Set(leaves.map((l) => l.student_id))]
+
+    const { data: invoices, error: invoicesError } = await supabase
+      .from("invoices")
+      .select("id, student_id, month, year, amount, students(full_name)")
+      .eq("status", "PAID")
+      .in("student_id", studentIds)
+
+    if (invoicesError) throw Errors.INTERNAL(invoicesError.message)
+
+    const conflicts = (invoices ?? []).filter((inv) =>
+      leaveKeys.has(`${inv.student_id}:${inv.month}:${inv.year}`)
+    )
+    if (conflicts.length === 0) return []
+
+    const { data: resolutions, error: resolutionsError } = await supabase
+      .from("paid_leave_conflict_resolutions")
+      .select("invoice_id")
+      .in(
+        "invoice_id",
+        conflicts.map((inv) => inv.id)
+      )
+
+    if (resolutionsError) throw Errors.INTERNAL(resolutionsError.message)
+
+    const resolvedIds = new Set((resolutions ?? []).map((r) => r.invoice_id))
+
+    return conflicts
+      .filter((inv) => !resolvedIds.has(inv.id))
+      .map((inv) => ({
+        invoice_id: inv.id,
+        student_id: inv.student_id,
+        student_name:
+          (inv.students as unknown as { full_name: string } | null)?.full_name ?? "",
+        month: inv.month,
+        year: inv.year,
+        amount: inv.amount,
+      }))
+      .sort(
+        (a, b) =>
+          b.year - a.year ||
+          b.month - a.month ||
+          a.student_name.localeCompare(b.student_name)
+      )
+  },
+
+  /**
+   * Marks a paid-leave conflict handled (refund/credit decided). Idempotent:
+   * re-resolving an already-resolved invoice succeeds without a second row.
+   */
+  async resolvePaidLeaveConflict(invoiceId: string, note?: string): Promise<void> {
+    const supabase = await createSupabaseServerClient()
+
+    const { data: invoice, error: fetchError } = await supabase
+      .from("invoices")
+      .select("id, status")
+      .eq("id", invoiceId)
+      .single()
+
+    if (fetchError || !invoice) throw Errors.INVOICE_NOT_FOUND()
+    if (invoice.status !== "PAID") {
+      throw Errors.BAD_REQUEST("Hanya tagihan lunas yang dapat ditandai selesai.")
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { error } = await supabase.from("paid_leave_conflict_resolutions").insert({
+      invoice_id: invoiceId,
+      note: note ?? null,
+      created_by: user?.id ?? null,
+    })
+
+    // 23505 = already resolved (unique invoice_id) — treat as success.
+    if (error && error.code !== "23505") throw Errors.INTERNAL(error.message)
   },
 }
