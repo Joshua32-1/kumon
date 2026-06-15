@@ -124,6 +124,7 @@ export interface SetLeaveBulkInput {
   month: number
   year: number
   reason?: string
+  cancel_unpaid_invoices?: boolean
 }
 
 export interface BulkLeaveUnpaidInvoice {
@@ -131,14 +132,19 @@ export interface BulkLeaveUnpaidInvoice {
   student_id: string
   student_name: string
   amount: number
-  status: "PENDING" | "OVERDUE"
+  status: "PENDING" | "OVERDUE" | "PAID"
 }
 
 export interface SetLeaveBulkResult {
   created: number
   skipped_existing: number
   skipped_ineligible: number
+  /** Still PENDING/OVERDUE after the action (cancel declined or failed). */
   unpaid_invoices: BulkLeaveUnpaidInvoice[]
+  /** Cancelled by the action because the admin opted in. */
+  cancelled_invoices: BulkLeaveUnpaidInvoice[]
+  /** Already PAID before cuti — refund/credit is a manual decision (see Dashboard). */
+  paid_invoices: BulkLeaveUnpaidInvoice[]
 }
 
 export interface PromoteGradesResult {

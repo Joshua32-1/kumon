@@ -204,3 +204,27 @@ export interface ReconcileBatchResult {
   synced: number
   errors: Array<{ invoiceId: string; error: string }>
 }
+
+/** Unpaid invoice matching a leave month, as reported by the leave-cancel helper. */
+export interface LeaveMonthInvoice {
+  invoice_id: string
+  student_id: string
+  student_name: string
+  amount: number
+  status: "PENDING" | "OVERDUE"
+}
+
+export interface LeaveInvoiceCancelResult {
+  cancelled: LeaveMonthInvoice[]
+  failed: LeaveMonthInvoice[]
+}
+
+/** PAID invoice whose month also has a temporary_leaves row — needs refund/credit review. */
+export interface PaidLeaveConflict {
+  invoice_id: string
+  student_id: string
+  student_name: string
+  month: number
+  year: number
+  amount: number
+}

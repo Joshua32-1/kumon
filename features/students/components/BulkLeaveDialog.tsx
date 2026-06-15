@@ -49,6 +49,7 @@ export function BulkLeaveDialog({ open, onOpenChange, onSuccess }: BulkLeaveDial
   const [reason, setReason] = useState("")
   const [search, setSearch] = useState("")
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [cancelInvoices, setCancelInvoices] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [result, setResult] = useState<SetLeaveBulkResult | null>(null)
 
@@ -65,6 +66,7 @@ export function BulkLeaveDialog({ open, onOpenChange, onSuccess }: BulkLeaveDial
     setReason("")
     setSearch("")
     setSelected(new Set())
+    setCancelInvoices(true)
     setResult(null)
   }, [open])
 
@@ -99,6 +101,7 @@ export function BulkLeaveDialog({ open, onOpenChange, onSuccess }: BulkLeaveDial
         month,
         year,
         reason: reason || undefined,
+        cancel_unpaid_invoices: cancelInvoices,
       })
       if ("error" in res && res.error) {
         toast.error("Terjadi kesalahan saat mencatat cuti.")
@@ -142,6 +145,34 @@ export function BulkLeaveDialog({ open, onOpenChange, onSuccess }: BulkLeaveDial
               <p className="text-muted-foreground">
                 {result.skipped_ineligible} siswa dilewati (tidak aktif).
               </p>
+            )}
+            {result.cancelled_invoices.length > 0 && (
+              <p>
+                <strong>{result.cancelled_invoices.length}</strong> tagihan{" "}
+                {getMonthName(month)} {year} dibatalkan.
+              </p>
+            )}
+            {result.paid_invoices.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted px-3 py-2.5 text-xs text-muted-foreground space-y-1">
+                <p>
+                  {result.paid_invoices.length} siswa sudah membayar tagihan{" "}
+                  {getMonthName(month)} {year} — tindak lanjuti pengembalian dana atau kredit
+                  (lihat panel di Dashboard):
+                </p>
+                <ul className="space-y-0.5">
+                  {result.paid_invoices.map((inv) => (
+                    <li key={inv.invoice_id}>
+                      <Link
+                        href={`/payments/${inv.invoice_id}`}
+                        className="underline hover:opacity-80"
+                        onClick={() => onOpenChange(false)}
+                      >
+                        {inv.student_name} ({formatRupiah(inv.amount)})
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
             {result.unpaid_invoices.length > 0 && (
               <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-muted)] px-3 py-2.5 text-xs text-[var(--warning-foreground)] space-y-1">
@@ -260,6 +291,16 @@ export function BulkLeaveDialog({ open, onOpenChange, onSuccess }: BulkLeaveDial
                 onChange={(e) => setReason(e.target.value)}
               />
             </div>
+
+            <label className="flex cursor-pointer items-start gap-2 text-sm">
+              <Checkbox
+                checked={cancelInvoices}
+                onCheckedChange={(checked) => setCancelInvoices(checked === true)}
+              />
+              <span>
+                Batalkan tagihan {getMonthName(month)} {year} yang belum lunas
+              </span>
+            </label>
           </div>
         )}
 

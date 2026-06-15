@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -42,11 +43,15 @@ export function LeaveDialog({ studentId, open, onOpenChange }: LeaveDialogProps)
   const [reason, setReason] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [existingInvoice, setExistingInvoice] = useState<UnpaidInvoice | null>(null)
+  const [paidInvoice, setPaidInvoice] = useState<UnpaidInvoice | null>(null)
+  const [cancelInvoice, setCancelInvoice] = useState(true)
 
   // Fetch invoice for selected month/year whenever either changes (and dialog is open)
   useEffect(() => {
     if (!open) return
     setExistingInvoice(null)
+    setPaidInvoice(null)
+    setCancelInvoice(true)
 
     fetch(`/api/payments?student_id=${studentId}&month=${month}&year=${year}`)
       .then((r) => r.json())
@@ -56,22 +61,51 @@ export function LeaveDialog({ studentId, open, onOpenChange }: LeaveDialogProps)
           (inv) => inv.status === "PENDING" || inv.status === "OVERDUE"
         )
         setExistingInvoice(unpaid ?? null)
+        setPaidInvoice(invoices.find((inv) => inv.status === "PAID") ?? null)
       })
-      .catch(() => setExistingInvoice(null))
+      .catch(() => {
+        setExistingInvoice(null)
+        setPaidInvoice(null)
+      })
   }, [open, studentId, month, year])
 
   async function handleSubmit() {
     setIsLoading(true)
-    const result = await setLeaveAction(studentId, month, year, reason || undefined)
-    setIsLoading(false)
+    try {
+      const result = await setLeaveAction(
+        studentId,
+        month,
+        year,
+        reason || undefined,
+        cancelInvoice
+      )
 
-    if ("error" in result && result.error) {
-      toast.error("Cuti bulan ini sudah ada atau terjadi kesalahan.")
-      return
+      if ("error" in result && result.error) {
+        toast.error("Cuti bulan ini sudah ada atau terjadi kesalahan.")
+        return
+      }
+
+      const data = "data" in result ? result.data : null
+      if (data && (data.cancel_error || data.failed_invoices.length > 0)) {
+        toast.warning(
+          `Cuti dicatat, tetapi tagihan gagal dibatalkan. Batalkan secara manual di halaman Pembayaran.`
+        )
+      } else if (data && data.cancelled_invoices.length > 0) {
+        toast.success(
+          `Cuti ${getMonthName(month)} ${year} dicatat. Tagihan bulan tersebut dibatalkan.`
+        )
+      } else {
+        toast.success(`Cuti ${getMonthName(month)} ${year} berhasil dicatat.`)
+      }
+      onOpenChange(false)
+      setReason("")
+    } catch {
+      toast.error(
+        "Terjadi kesalahan saat mencatat cuti. Muat ulang halaman untuk memeriksa status cuti dan tagihan."
+      )
+    } finally {
+      setIsLoading(false)
     }
-    toast.success(`Cuti ${getMonthName(month)} ${year} berhasil dicatat.`)
-    onOpenChange(false)
-    setReason("")
   }
 
   return (
@@ -125,14 +159,42 @@ export function LeaveDialog({ studentId, open, onOpenChange }: LeaveDialogProps)
           </div>
 
           {existingInvoice && (
-            <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-muted)] px-3 py-2.5 text-xs text-[var(--warning-foreground)] space-y-1">
+            <div className="rounded-lg border border-[var(--warning-border)] bg-[var(--warning-muted)] px-3 py-2.5 text-xs text-[var(--warning-foreground)] space-y-2">
               <p className="font-medium">
                 Tagihan {getMonthName(month)} {year} ({formatRupiah(existingInvoice.amount)}) masih belum lunas.
               </p>
+              <label className="flex cursor-pointer items-start gap-2">
+                <Checkbox
+                  checked={cancelInvoice}
+                  onCheckedChange={(checked) => setCancelInvoice(checked === true)}
+                />
+                <span>
+                  Batalkan tagihan {getMonthName(month)} {year} yang belum lunas
+                </span>
+              </label>
+              {!cancelInvoice && (
+                <p>
+                  Setelah cuti dicatat, bebaskan atau batalkan tagihan secara manual.{" "}
+                  <Link
+                    href={`/payments/${existingInvoice.id}`}
+                    className="underline hover:opacity-80"
+                    onClick={() => onOpenChange(false)}
+                  >
+                    Lihat tagihan
+                  </Link>
+                </p>
+              )}
+            </div>
+          )}
+
+          {paidInvoice && (
+            <div className="rounded-lg border border-border bg-muted px-3 py-2.5 text-xs text-muted-foreground space-y-1">
               <p>
-                Setelah cuti dicatat, bebaskan atau batalkan tagihan secara manual.{" "}
+                Tagihan {getMonthName(month)} {year} ({formatRupiah(paidInvoice.amount)}) sudah
+                dibayar. Setelah cuti dicatat, tindak lanjuti pengembalian dana atau kredit —
+                lihat panel di Dashboard.{" "}
                 <Link
-                  href={`/payments/${existingInvoice.id}`}
+                  href={`/payments/${paidInvoice.id}`}
                   className="underline hover:opacity-80"
                   onClick={() => onOpenChange(false)}
                 >

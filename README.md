@@ -235,8 +235,10 @@ Apply database migrations **before** (or at the same time as) deploying app code
 
 - **`0001`** creates the full schema (enums, tables, RLS, config seeds). Includes `PAID_OLD_LINK`, `reminder_status.CANCELLED`, subject billing, and the partial unique index on invoices.
 - **`0002`** adds the idempotent `promote_grades_annual` RPC used by the July grade-promotion cron. Without it, `/api/cron/promote-grades` fails at runtime.
+- **`0003`–`0009`** pay tokens, cron toggles, fee schedule, integrity constraints, atomic invoice-write RPCs, and the promote-grades year guard (see DATABASE.md).
+- **`0010`** adds the `paid_leave_conflict_resolutions` table backing the dashboard paid-leave panel. Without it, the dashboard 500s on the missing table. Verify: `SELECT count(*) FROM pg_policies WHERE tablename = 'paid_leave_conflict_resolutions' AND policyname = 'admin_all';` → 1.
 
-1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0002`.
+1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0010`.
 2. **Verify enums** — in the Supabase SQL editor:
 
    ```sql

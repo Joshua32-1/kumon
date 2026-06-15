@@ -1,9 +1,11 @@
 import Link from "next/link"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { studentService } from "@/features/students/service"
+import { paymentService } from "@/features/payments/service"
 import { PageHeader } from "@/components/shared/PageHeader"
 import { KpiCard } from "@/components/shared/KpiCard"
 import { AlertPanel } from "@/components/shared/AlertPanel"
+import { PaidLeaveConflictPanel } from "@/features/payments/components/PaidLeaveConflictPanel"
 import { RevenueChart } from "@/components/dashboard/RevenueChart"
 import { leaveReviewSummary } from "@/lib/billing/leave-review-label"
 import { summarizeArrears } from "@/lib/billing/arrears"
@@ -86,9 +88,10 @@ async function getDashboardStats() {
 }
 
 export default async function DashboardPage() {
-  const [stats, leaveReview] = await Promise.all([
+  const [stats, leaveReview, paidLeaveConflicts] = await Promise.all([
     getDashboardStats(),
     studentService.listLeaveReviewAlerts(),
+    paymentService.listPaidLeaveConflicts(),
   ])
 
   const operationalCards = [
@@ -180,6 +183,8 @@ export default async function DashboardPage() {
           }))}
         />
       )}
+
+      <PaidLeaveConflictPanel conflicts={paidLeaveConflicts} />
 
       {stats.arrears.byPeriod.length > 0 && (
         <AlertPanel
