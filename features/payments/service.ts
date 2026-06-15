@@ -18,6 +18,7 @@ import { Errors } from "@/lib/errors"
 import { DEFAULT_REMINDER_DAYS } from "@/lib/constants"
 import {
   toDateString,
+  lastDayOfMonth,
   todayInCenterTimezone,
   dayOfMonthFromDateString,
   monthYearFromDateString,
@@ -43,6 +44,7 @@ import type {
   PaymentStatus,
   GenerateMonthlyInput,
   GenerateResult,
+  MarkOverdueResult,
   CheckoutLinksResult,
   BackfillLinksResult,
   GenerateCandidate,
@@ -449,16 +451,16 @@ async function ensureOverdueCatchUpReminder(
   return inserted as PaymentReminder
 }
 
-async function markPriorInvoicesOverdue(
+/** Flip every PENDING invoice past its due date to OVERDUE. Idempotent. Returns count. */
+async function markOverdueInvoices(
   supabase: SupabaseClient | typeof supabaseAdmin,
-  month: number,
-  year: number
+  today: string
 ): Promise<number> {
   const { data, error } = await supabase
     .from("invoices")
     .update({ status: "OVERDUE" })
     .eq("status", "PENDING")
-    .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`)
+    .lt("due_date", today) // string compare on YYYY-MM-DD
     .select("id")
 
   if (error) throw Errors.INTERNAL(error.message)
@@ -640,7 +642,7 @@ export const paymentService = {
     const allowedCategories = categories ?? DEFAULT_GENERATE_CATEGORIES
     const selectedStudentIds = student_ids ? new Set(student_ids) : null
 
-    const marked_overdue = await markPriorInvoicesOverdue(supabase, month, year)
+    const marked_overdue = await markOverdueInvoices(supabase, todayInCenterTimezone())
 
     const { fees: feeConfig } = await loadSubjectFeesForPeriod(supabase, month, year)
 
@@ -687,7 +689,7 @@ export const paymentService = {
       invoicesByStudent.set(row.student_id, list)
     }
 
-    const dueDate = toDateString(year, month, 20)
+    const dueDate = toDateString(year, month, lastDayOfMonth(year, month))
 
     let skippedOnLeave = 0
     let skippedExisting = 0
@@ -831,6 +833,15 @@ export const paymentService = {
       payment_link_failed_ids: [],
       marked_overdue,
     }
+  },
+
+  /** Cron flow: flip PENDING invoices past their due date to OVERDUE (date-driven). */
+  async markOverdueByDueDate(today?: string): Promise<MarkOverdueResult> {
+    const marked = await markOverdueInvoices(
+      supabaseAdmin,
+      today ?? todayInCenterTimezone()
+    )
+    return { marked }
   },
 
   async ensurePaymentAccessToken(invoiceId: string): Promise<string> {

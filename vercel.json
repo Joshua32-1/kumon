@@ -59,6 +59,10 @@
     {
       "path": "/api/cron/sync-leave-status",
       "schedule": "15 17 * * *"
+    },
+    {
+      "path": "/api/cron/mark-overdue",
+      "schedule": "30 17 * * *"
     }
   ]
 }

@@ -76,6 +76,12 @@ export function toDateString(year: number, month: number, day: number): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
 }
 
+/** Last calendar day (28–31) of the given 1-based month. */
+export function lastDayOfMonth(year: number, month: number): number {
+  // Day 0 of the next month === last day of this month. UTC avoids local-tz drift.
+  return new Date(Date.UTC(year, month, 0)).getUTCDate()
+}
+
 /** Day of month (1–31) from an ISO date string in center context (YYYY-MM-DD). */
 export function dayOfMonthFromDateString(isoDate: string): number {
   return Number(isoDate.slice(8, 10))
