@@ -81,7 +81,7 @@ Invoice generation and WhatsApp reminders run via cron API routes, scheduled by 
 | 1 Jul, 00:00 | `GET /api/cron/promote-grades` | Promotes grade for all **ACTIVE** and **TEMPORARY_LEAVE** students (TK 1→TK 2→…→SD 6→SMP 1→…→SMA 3; SMA 3 unchanged). Updates billing tier (TK/SD vs SMP/SMA) from grade. Skips **INACTIVE** only. **Idempotent per year** — a second run for the same promotion year is a no-op (`already_promoted: true`). Only allowed in July (WIB) unless overridden for testing. |
 | 1st, 07:00 | `GET /api/cron/generate-invoices` | Marks all older unpaid (`PENDING`) invoices as `OVERDUE`, then creates one invoice per **ACTIVE** or **TEMPORARY_LEAVE** student for the current month (skips students with a `temporary_leaves` row for that month, with an existing non-cancelled invoice, or with no subjects enrolled). Amount = sum of per-subject fees for that student's school level. Assigns a stable app pay link (`/pay/{token}`) per invoice — Midtrans checkout is created only when a parent opens the link. Schedules reminders for the 1st, 11th, and 21st. |
 | Daily, 07:30 | `GET /api/cron/backfill-payment-links` | Assigns `payment_access_token` for up to 50 unpaid (`PENDING`/`OVERDUE`) invoices missing a token (oldest first). Safety net for legacy rows before morning reminders. |
-| 1st, 11th, 21st — 09:00–13:00 WIB (slots 1–9) | `GET /api/cron/send-reminders` | **Slots 1–9** of 10 (every 30 min). Phase 1 only — current-month scheduled reminders, up to 100 sends per slot, 2s delay between sends. |
+| 1st, 11th, 21st — 09:00–13:00 WIB (slots 1–9) | `GET /api/cron/send-reminders` | **Slots 1–9** of 10 (every 30 min). Phase 1: for each invoice with a due (`scheduled_date <= today`) unsent reminder, send only its **latest** due reminder and cancel earlier due rows ("Digantikan pengingat terbaru"); up to 100 sends per slot, 2s delay between sends. |
 | 1st, 11th, 21st — 13:30 WIB (slot 10) | `GET /api/cron/send-reminders` | **Slot 10**. Phase 1 remainder + **Phase 2** (OVERDUE/prior-month chase). Total morning capacity: **~1000 sends**. |
 | Daily, 22:00 | `GET /api/cron/reconcile-payments` | Polls Midtrans for unpaid invoices (6+ hours old) that have opened checkout at least once. Syncs `PAID` status and sends confirmation WhatsApp when Midtrans shows settlement but the webhook was missed. |
 
@@ -200,7 +200,7 @@ Long-running cron routes set `maxDuration` (requires **Vercel Pro** — Hobby ca
 
 **Vercel Hobby** cannot run reminder or invoice-generation workloads at scale — functions time out after ~10s. Use **Vercel Pro** (for `maxDuration` up to 300s) or an **external cron** (e.g. GitHub Actions, cron-job.org) that calls the same GET endpoints with `Authorization: Bearer {CRON_SECRET}`.
 
-Slots 1–9 send only current-month reminders (Phase 1). Slot 10 also sends overdue/prior-month chase messages (Phase 2). Deduplication is automatic — already-SENT rows are skipped by subsequent slots.
+Every slot runs Phase 1: for each invoice with a due (`scheduled_date <= today`) unsent reminder it sends only the **latest** due reminder and cancels the earlier due rows ("Digantikan pengingat terbaru"), so a reminder stranded in the past (mid-month enrollment, cuti rebill) is sent once and never duplicated or sent out of order; a same-day `FAILED` row is retried by the next slot. Slot 10 additionally sends the overdue/prior-month chase (Phase 2). Deduplication is automatic — already-SENT rows are skipped by subsequent slots.
 
 ### Attention and arrears tracking
 
@@ -238,8 +238,9 @@ Apply database migrations **before** (or at the same time as) deploying app code
 - **`0003`–`0009`** pay tokens, cron toggles, fee schedule, integrity constraints, atomic invoice-write RPCs, and the promote-grades year guard (see DATABASE.md).
 - **`0010`** adds the `paid_leave_conflict_resolutions` table backing the dashboard paid-leave panel. Without it, the dashboard 500s on the missing table. Verify: `SELECT count(*) FROM pg_policies WHERE tablename = 'paid_leave_conflict_resolutions' AND policyname = 'admin_all';` → 1.
 - **`0011`** drops the unused legacy `whatsapp_provider` config seed (messaging runs on the Meta WhatsApp Cloud API via `META_*` env vars). Harmless no-op if already absent. Verify: `SELECT count(*) FROM system_config WHERE key = 'whatsapp_provider';` → 0.
+- **`0012`** clamps `reminder_days` into the invoice month's valid range inside `create_invoice_with_lines`, so a misconfigured day (e.g. 31) can't crash invoice generation on short months. `CREATE OR REPLACE` — safe to re-run. Verify: `SELECT position('GREATEST(1, LEAST' in pg_get_functiondef('create_invoice_with_lines(jsonb,jsonb,int[])'::regprocedure)) > 0;` → `t`.
 
-1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0011`.
+1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0012`.
 2. **Verify enums** — in the Supabase SQL editor:
 
    ```sql
