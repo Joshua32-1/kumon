@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { PaymentStatusBadge } from "./PaymentStatusBadge"
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog"
 import { StatusBadge } from "@/components/shared/StatusBadge"
-import { formatRupiah, getMonthName, formatDate } from "@/lib/utils"
+import { formatRupiah, getMonthName, formatDate, todayInCenterTimezone } from "@/lib/utils"
 import { getBillingSummary, WA_STATUS_LABELS } from "@/features/payments/billing-summary"
 import {
   markPaidAction,
@@ -39,7 +39,7 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
   const isPaidOldLink = invoice.status === "PAID_OLD_LINK"
   const lineItems = invoice.invoice_line_items ?? []
   const reminders = invoice.payment_reminders ?? []
-  const summary = getBillingSummary(invoice, reminders)
+  const summary = getBillingSummary(invoice, reminders, todayInCenterTimezone())
 
   async function handleMarkPaid() {
     setIsProcessing(true)
@@ -316,7 +316,7 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
                       </p>
                     )}
 
-                    {isPending && (
+                    {isPending && r.status !== "CANCELLED" && (
                       <div className="flex gap-1.5 pt-0.5">
                         <button
                           onClick={() => handleSendReminderNow(r.id)}

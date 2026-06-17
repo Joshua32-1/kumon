@@ -1238,13 +1238,9 @@ export const paymentService = {
     const sendResult = await messagingService.sendPaymentReminder(
       invoice,
       primaryContact,
-      nextNumber,
       paymentUrl,
       lineItems,
-      paymentWhatsAppContext(student, invoice),
-      // Recalc isn't an Nth reminder — fill {{pengingat_ke}} with a fixed word
-      // so the message reads "pengingat pembaruan pembayaran", not "ke-N".
-      "pembaruan"
+      paymentWhatsAppContext(student, invoice)
     )
 
     if (!sendResult.success) {
@@ -1331,21 +1327,37 @@ export const paymentService = {
         return { ok: false, error: "Pengingat ini belum jatuh tempo" }
       }
     } else {
-      // Pick lowest-number FAILED or PENDING row; respect schedule unless overridden
+      // Scheduled path (cron + manual "Kirim WA sekarang"): pick the HIGHEST-number due reminder —
+      // the most recent slot the parent should hear about — and supersede earlier due ones below,
+      // so a reminder stranded in the past (mid-month enrollment, cuti rebill) is never resurrected
+      // or mislabeled. The bulk link-send path (ignoreSchedule) keeps its original lowest-first,
+      // no-supersede behavior so it doesn't cancel still-scheduled reminders.
+      const ascending = ignoreSchedule
       let q = supabaseAdmin
         .from("payment_reminders")
         .select("*")
         .eq("invoice_id", invoiceId)
         .in("status", ["PENDING", "FAILED"])
-        .order("reminder_number", { ascending: true })
+        .order("reminder_number", { ascending })
         .limit(1)
       if (!ignoreSchedule) q = q.lte("scheduled_date", today)
       const { data: rows } = await q
       targetReminder = rows?.[0] ? (rows[0] as PaymentReminder) : null
+
+      // Cancel older due reminders so they can't fire later (a subsequent cron slot or manual send)
+      // or be sent out of order. Mirrors ensureOverdueCatchUpReminder's stale-row cancellation.
+      if (targetReminder && !ignoreSchedule) {
+        await supabaseAdmin
+          .from("payment_reminders")
+          .update({ status: "CANCELLED", message_preview: "Digantikan pengingat terbaru" })
+          .eq("invoice_id", invoiceId)
+          .in("status", ["PENDING", "FAILED"])
+          .lte("scheduled_date", today)
+          .lt("reminder_number", targetReminder.reminder_number)
+      }
     }
 
     if (!targetReminder && ignoreSchedule) {
-      const today = todayInCenterTimezone()
       const { month: currentMonth, year: currentYear } = monthYearFromDateString(today)
       const chaseableUnpaid =
         invoice.status === "OVERDUE" ||
@@ -1378,7 +1390,6 @@ export const paymentService = {
     const sendResult = await messagingService.sendPaymentReminder(
       invoice,
       primaryContact,
-      targetReminder.reminder_number,
       paymentUrl,
       lineItems,
       paymentWhatsAppContext(student, invoice)
@@ -1445,32 +1456,44 @@ export const paymentService = {
         result.sent++
       } else {
         const skip =
-          outcome.error?.startsWith("Invoice already") || outcome.error === "Student inactive"
+          outcome.error?.startsWith("Invoice already") ||
+          outcome.error === "Student inactive" ||
+          outcome.error === "Tidak ada pengingat yang sudah jatuh tempo untuk dikirim"
         if (skip) result.skipped++
         else result.failed++
       }
     }
 
-    // Phase 1: this month's scheduled reminders (scheduled_date === today)
-    const { data: reminders, error } = await supabaseAdmin
+    // Phase 1: every invoice with a due, not-yet-sent reminder. Using `scheduled_date <= today`
+    // (not `=== today`) catches reminders whose scheduled day passed before the invoice existed
+    // (mid-month enrollment, manual generation, cuti rebill). FAILED rows are limited to today so a
+    // transient failure retries on the next slot (same-day retry) without endlessly re-hitting an
+    // ancient permanently-failing number. Per invoice we send only the latest due reminder and
+    // supersede the rest, so each invoice gets at most one send per run; the processedInvoiceIds
+    // set then keeps Phase 2 from touching the same invoice.
+    const { data: dueReminders, error } = await supabaseAdmin
       .from("payment_reminders")
-      .select("id, invoice_id")
-      .eq("scheduled_date", today)
-      .eq("status", "PENDING")
+      .select("invoice_id")
+      .or(
+        `and(status.eq.PENDING,scheduled_date.lte.${today}),and(status.eq.FAILED,scheduled_date.eq.${today})`
+      )
 
     if (error) throw Errors.INTERNAL(error.message)
 
-    for (const reminder of reminders ?? []) {
+    const dueInvoiceIds = Array.from(
+      new Set((dueReminders ?? []).map((r) => r.invoice_id as string))
+    )
+
+    for (const invoiceId of dueInvoiceIds) {
       if (result.processed >= batchLimit) {
         result.truncated = true
         return result
       }
       result.processed++
-      processedInvoiceIds.add(reminder.invoice_id)
-      const outcome = await paymentService.sendPaymentReminderForInvoice(
-        reminder.invoice_id,
-        { reminderId: reminder.id, initiatedBy: "cron" }
-      )
+      processedInvoiceIds.add(invoiceId)
+      const outcome = await paymentService.sendPaymentReminderForInvoice(invoiceId, {
+        initiatedBy: "cron",
+      })
       recordOutcome(outcome)
       if (result.processed < batchLimit) await sleep(delayMs)
     }
@@ -1737,8 +1760,7 @@ export const paymentService = {
 
   /** Build the WA reminder message text for copy-paste without sending. */
   async getReminderMessagePreview(
-    invoiceId: string,
-    reminderNumber?: number
+    invoiceId: string
   ): Promise<{ message: string; paymentUrl: string; whatsappNumber: string } | null> {
     const { data: invRow } = await supabaseAdmin
       .from("invoices")
@@ -1766,19 +1788,6 @@ export const paymentService = {
       return null
     }
 
-    // Pick reminder number: given, or first pending/failed, or 1
-    let num = reminderNumber ?? 1
-    if (!reminderNumber) {
-      const { data: rows } = await supabaseAdmin
-        .from("payment_reminders")
-        .select("reminder_number")
-        .eq("invoice_id", invoiceId)
-        .in("status", ["PENDING", "FAILED"])
-        .order("reminder_number", { ascending: true })
-        .limit(1)
-      if (rows?.[0]) num = rows[0].reminder_number
-    }
-
     const invoice = inv as Invoice
     const lineItems = inv.invoice_line_items ?? []
     const message = buildPaymentReminderMessage({
@@ -1789,7 +1798,6 @@ export const paymentService = {
         student.school_level ??
         "ELEMENTARY",
       invoice,
-      reminderNumber: num,
       paymentUrl,
       lineItems,
     })

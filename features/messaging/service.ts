@@ -137,26 +137,20 @@ export function buildPaymentReminderMessage(params: {
   studentName: string
   schoolLevel: SchoolLevel
   invoice: Invoice
-  reminderNumber: number
   paymentUrl: string
   lineItems: Array<Partial<LineItemInput>>
-  /** Fixed word for the {{pengingat_ke}} slot (e.g. "pembaruan" on recalc). */
-  ordinalOverride?: string
 }): string {
   const {
     contactName,
     studentName,
     schoolLevel,
     invoice,
-    reminderNumber,
     paymentUrl,
     lineItems,
-    ordinalOverride,
   } = params
   const normalized = normalizeLineItems(lineItems)
   const monthName = getMonthName(invoice.month)
   const total = formatRupiah(invoice.amount)
-  const ordinal = ordinalOverride ?? (["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`)
 
   const enrollment = formatStudentEnrollmentForWhatsApp(
     studentName,
@@ -173,7 +167,7 @@ export function buildPaymentReminderMessage(params: {
 
   return (
     `Halo Bapak/Ibu ${contactName},\n\n` +
-    `Ini adalah pengingat ${ordinal} pembayaran untuk siswa ${studentName}:\n\n` +
+    `Ini adalah pengingat pembayaran untuk siswa ${studentName}:\n\n` +
     `${enrollment}\n\n` +
     `${details}\n\n` +
     `Silakan bayar melalui link berikut:\n${paymentUrl}\n\n` +
@@ -225,11 +219,9 @@ export const messagingService = {
   async sendPaymentReminder(
     invoice: Invoice,
     contact: Contact,
-    reminderNumber: number,
     paymentUrl: string,
     lineItems: Array<Partial<LineItemInput>> = [],
-    context: PaymentWhatsAppContext,
-    ordinalOverride?: string
+    context: PaymentWhatsAppContext
   ): Promise<MessageResult> {
     const provider = getProvider()
     const templateName = process.env.META_TEMPLATE_REMINDER_NAME
@@ -237,7 +229,6 @@ export const messagingService = {
 
     if (templateName && provider.sendTemplate) {
       const normalized = normalizeLineItems(lineItems)
-      const ordinal = ordinalOverride ?? (["pertama", "kedua", "ketiga"][reminderNumber - 1] ?? `ke-${reminderNumber}`)
       const subjects = subjectLabelsFromLineItems(normalized)
       const subjectsText = subjects.length > 0 ? subjects.join(", ") : "—"
       // Named template body params (Meta parameter_format: named)
@@ -247,7 +238,6 @@ export const messagingService = {
           parameters: [
             { type: "text", parameter_name: "nama_orang_tua", text: contact.full_name },
             { type: "text", parameter_name: "nama_siswa", text: context.studentName },
-            { type: "text", parameter_name: "pengingat_ke", text: ordinal },
             {
               type: "text",
               parameter_name: "bulan_tagihan",
@@ -267,10 +257,8 @@ export const messagingService = {
       studentName: context.studentName,
       schoolLevel: context.schoolLevel,
       invoice,
-      reminderNumber,
       paymentUrl,
       lineItems,
-      ordinalOverride,
     })
     return this.send(contact.whatsapp_number, message)
   },

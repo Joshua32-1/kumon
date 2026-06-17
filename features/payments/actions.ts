@@ -95,8 +95,8 @@ export async function markReminderSentManuallyAction(reminderId: string, invoice
   return result
 }
 
-export async function getReminderMessagePreviewAction(invoiceId: string, reminderNumber?: number) {
-  const result = await paymentService.getReminderMessagePreview(invoiceId, reminderNumber)
+export async function getReminderMessagePreviewAction(invoiceId: string) {
+  const result = await paymentService.getReminderMessagePreview(invoiceId)
   return result
 }
 
