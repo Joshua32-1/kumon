@@ -60,6 +60,11 @@ describe("resolveFeesForPeriod", () => {
     expect(resolveFeesForPeriod(schedule, 6, 2026).elementary.english).toBe(600_000)
   })
 
+  it("keeps the latest entry for any period after the last change", () => {
+    expect(resolveFeesForPeriod(schedule, 9, 2026).elementary.english).toBe(600_000)
+    expect(resolveFeesForPeriod(schedule, 3, 2030).elementary.english).toBe(600_000)
+  })
+
   it("falls back when the period precedes every entry", () => {
     expect(resolveFeesForPeriod(schedule, 12, 2024)).toBe(DEFAULT_SUBJECT_FEES)
   })

@@ -48,6 +48,13 @@ describe("verifyCronAuth", () => {
     expect(verifyCronAuth(fakeRequest({ authorization: "Bearer cron-secret" }))).toBe(false)
   })
 
+  it("rejects any x-api-key when WEBHOOK_SECRET is unset", () => {
+    // Symmetric to the bearer case: a missing secret must never validate, even
+    // if a client happens to send a key.
+    delete process.env.WEBHOOK_SECRET
+    expect(verifyCronAuth(fakeRequest({ "x-api-key": "anything" }))).toBe(false)
+  })
+
   it("rejects a request with no auth headers", () => {
     expect(verifyCronAuth(fakeRequest({}))).toBe(false)
   })
