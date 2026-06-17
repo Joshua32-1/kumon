@@ -1,10 +1,10 @@
 # Database
 
-Schema reference for the Supabase Postgres database. Source of truth: [supabase/migrations/](supabase/migrations/) (0001–0005). TypeScript types are generated into [types/database.ts](types/database.ts).
+Schema reference for the Supabase Postgres database. Source of truth: [supabase/migrations/](supabase/migrations/) (0001–0012). TypeScript types are generated into [types/database.ts](types/database.ts).
 
 ## Migration workflow
 
-- Files are numbered (`0001_…` … `0005_…`) and **applied manually in order** — Supabase SQL editor or `npx supabase db push`. There is no automatic runner; keep app deploys paired with schema state.
+- Files are numbered (`0001_…` … `0012_…`) and **applied manually in order** — Supabase SQL editor or `npx supabase db push`. There is no automatic runner; keep app deploys paired with schema state.
 - Never edit a migration that has been applied to production; add the next number instead.
 - After any schema change: `npx supabase gen types typescript --project-id <id> > types/database.ts`, then `npx tsc --noEmit`.
 - See `.claude/skills/supabase-migrations/SKILL.md` for full conventions.
@@ -20,6 +20,8 @@ Verify `0006`: `SELECT conname FROM pg_constraint WHERE conname IN ('invoices_am
 `0009` promote-grades year guard — `CREATE OR REPLACE promote_grades_annual` rejects `p_promotion_year` outside `[2020 .. current WIB year]`. Verify: `SELECT promote_grades_annual(EXTRACT(YEAR FROM now() AT TIME ZONE 'Asia/Jakarta')::int + 1);` should error "invalid promotion year".
 
 `0010` paid-leave conflict resolutions — new `paid_leave_conflict_resolutions` table backing the dashboard "Tagihan sudah dibayar untuk bulan cuti" panel. A PAID invoice whose billing month also has a `temporary_leaves` row is a conflict, shown all-time (no month window) until an admin clicks "Tandai selesai" (one resolution row per invoice) or the cuti is cancelled. Verify: `SELECT count(*) FROM pg_policies WHERE tablename = 'paid_leave_conflict_resolutions' AND policyname = 'admin_all';` should return 1.
+
+`0011` drop legacy `whatsapp_provider` config — removes the unused `whatsapp_provider` `system_config` seed (messaging runs on the Meta WhatsApp Cloud API via `META_*` env vars). Harmless no-op if already absent. Verify: `SELECT count(*) FROM system_config WHERE key = 'whatsapp_provider';` should return 0.
 
 `0012` clamp reminder days — `CREATE OR REPLACE create_invoice_with_lines` clamps each `reminder_days` value into the invoice month's `[1, last_day]` range before `make_date`, so a misconfigured day (e.g. 31) can't crash generation on short months. Verify: temporarily set `system_config.reminder_days` to `{"days":[1,11,31]}` and create a February invoice — the third reminder lands on Feb 28/29, no error.
 

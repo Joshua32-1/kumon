@@ -76,14 +76,7 @@ Invoice generation and WhatsApp reminders run via cron API routes, scheduled by 
 
 ### What runs automatically
 
-| Schedule (WIB) | Endpoint | What it does |
-|---|---|---|
-| 1 Jul, 00:00 | `GET /api/cron/promote-grades` | Promotes grade for all **ACTIVE** and **TEMPORARY_LEAVE** students (TK 1→TK 2→…→SD 6→SMP 1→…→SMA 3; SMA 3 unchanged). Updates billing tier (TK/SD vs SMP/SMA) from grade. Skips **INACTIVE** only. **Idempotent per year** — a second run for the same promotion year is a no-op (`already_promoted: true`). Only allowed in July (WIB) unless overridden for testing. |
-| 1st, 07:00 | `GET /api/cron/generate-invoices` | Marks all older unpaid (`PENDING`) invoices as `OVERDUE`, then creates one invoice per **ACTIVE** or **TEMPORARY_LEAVE** student for the current month (skips students with a `temporary_leaves` row for that month, with an existing non-cancelled invoice, or with no subjects enrolled). Amount = sum of per-subject fees for that student's school level. Assigns a stable app pay link (`/pay/{token}`) per invoice — Midtrans checkout is created only when a parent opens the link. Schedules reminders for the 1st, 11th, and 21st. |
-| Daily, 07:30 | `GET /api/cron/backfill-payment-links` | Assigns `payment_access_token` for up to 50 unpaid (`PENDING`/`OVERDUE`) invoices missing a token (oldest first). Safety net for legacy rows before morning reminders. |
-| 1st, 11th, 21st — 09:00–13:00 WIB (slots 1–9) | `GET /api/cron/send-reminders` | **Slots 1–9** of 10 (every 30 min). Phase 1: for each invoice with a due (`scheduled_date <= today`) unsent reminder, send only its **latest** due reminder and cancel earlier due rows ("Digantikan pengingat terbaru"); up to 100 sends per slot, 2s delay between sends. |
-| 1st, 11th, 21st — 13:30 WIB (slot 10) | `GET /api/cron/send-reminders` | **Slot 10**. Phase 1 remainder + **Phase 2** (OVERDUE/prior-month chase). Total morning capacity: **~1000 sends**. |
-| Daily, 22:00 | `GET /api/cron/reconcile-payments` | Polls Midtrans for unpaid invoices (6+ hours old) that have opened checkout at least once. Syncs `PAID` status and sends confirmation WhatsApp when Midtrans shows settlement but the webhook was missed. |
+Seven cron jobs (invoice generation, grade promotion, reminder slots, payment reconciliation, token backfill, leave-status sync, overdue marking) are scheduled by `vercel.json`. The full schedule table — exact UTC cron expressions, WIB times, `maxDuration`, POST overrides, and result fields — lives in **[API.md](API.md)** (Cron routes). At a glance: invoices generate on the 1st at 07:00 WIB, reminders go out in ten slots across 09:00–13:30 WIB on the 1st/11th/21st (~1000 sends/morning), grades promote each July, and daily jobs backfill pay tokens, mark overdue invoices, sync leave status, and reconcile Midtrans.
 
 Each student gets **at most one active invoice per month** (unique on `student_id + month + year` where status is not `CANCELLED` or `PAID_OLD_LINK`).
 
@@ -91,77 +84,11 @@ When a new month's invoices are generated, any invoice for an **earlier** month 
 
 WhatsApp reminders and payment confirmations include the student's name, school level (TK/SD vs SMP/SMA), and the subjects billed on that invoice so parents can verify enrollment.
 
-### Auth
+### Auth & manual triggers
 
-**Vercel Cron (production):** routes are invoked with **GET** and `Authorization: Bearer {CRON_SECRET}`. `CRON_SECRET` is required on Vercel — without it, cron jobs return 401. Set it in Vercel → Project → Settings → Environment Variables (Production, and Preview if crons run there).
+Cron routes authenticate with `Authorization: Bearer {CRON_SECRET}` (Vercel Cron, GET) or `x-api-key: {WEBHOOK_SECRET}` (manual, POST + optional JSON overrides). `CRON_SECRET` is **required on Vercel** — set it in Project → Settings → Environment Variables (Production, plus Preview if crons run there) or jobs return 401.
 
-**Manual / local debugging:** routes also accept **POST** with:
-- `x-api-key: {WEBHOOK_SECRET}` — supports optional JSON body for overrides (month, slot, `force`, etc.)
-- `Authorization: Bearer {CRON_SECRET}` — same auth as Vercel Cron, on GET or POST
-
-### Manual trigger (testing)
-
-**Simulate Vercel Cron** (GET + bearer — matches production):
-
-```bash
-# Generate invoices for the current month (WIB)
-curl http://localhost:3000/api/cron/generate-invoices \
-  -H "Authorization: Bearer YOUR_CRON_SECRET"
-
-# Send due reminders (default slot 1)
-curl http://localhost:3000/api/cron/send-reminders \
-  -H "Authorization: Bearer YOUR_CRON_SECRET"
-
-# Promote grades (July only in WIB)
-curl http://localhost:3000/api/cron/promote-grades \
-  -H "Authorization: Bearer YOUR_CRON_SECRET"
-
-# Reconcile unpaid invoices against Midtrans
-curl http://localhost:3000/api/cron/reconcile-payments \
-  -H "Authorization: Bearer YOUR_CRON_SECRET"
-
-# Backfill missing payment tokens
-curl http://localhost:3000/api/cron/backfill-payment-links \
-  -H "Authorization: Bearer YOUR_CRON_SECRET"
-```
-
-**Manual overrides** (POST + `x-api-key` — JSON body for parameters):
-
-```bash
-# Generate invoices for a specific month
-curl -X POST http://localhost:3000/api/cron/generate-invoices \
-  -H "x-api-key: YOUR_WEBHOOK_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"month": 6, "year": 2026}'
-
-# Send due reminders — slot 1 (Phase 1 only, up to 100)
-curl -X POST http://localhost:3000/api/cron/send-reminders \
-  -H "x-api-key: YOUR_WEBHOOK_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"slot": 1}'
-
-# Send due reminders — slot 10 (Phase 1 + Phase 2 overdue chase)
-curl -X POST http://localhost:3000/api/cron/send-reminders \
-  -H "x-api-key: YOUR_WEBHOOK_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"slot": 10}'
-
-# Promote grades off-season (dev only — requires explicit promotionYear)
-curl -X POST http://localhost:3000/api/cron/promote-grades \
-  -H "x-api-key: YOUR_WEBHOOK_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"force": true, "promotionYear": 2099}'
-
-# Reconcile unpaid invoices against Midtrans
-curl -X POST http://localhost:3000/api/cron/reconcile-payments \
-  -H "x-api-key: YOUR_WEBHOOK_SECRET"
-
-# Backfill missing payment links for a specific month
-curl -X POST http://localhost:3000/api/cron/backfill-payment-links \
-  -H "x-api-key: YOUR_WEBHOOK_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"month": 6, "year": 2026, "batch_limit": 100}'
-```
+For per-route auth details, POST override parameters, and copy-paste curl recipes (simulate Vercel Cron, force a specific month/slot, off-season grade promotion, etc.), see **[API.md](API.md)** (Cron routes → curl recipes).
 
 ### Parent payment links (`/pay/{token}`)
 
