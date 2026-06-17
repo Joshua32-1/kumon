@@ -78,7 +78,7 @@ Verifies the SHA-512 `signature_key` before anything else (401 `WEBHOOK_INVALID`
 | `sync-leave-status` | `15 17 * * *` → daily 00:15 | — | none | `month`, `year`, `marked_on_leave`, `reactivated` |
 | `mark-overdue` | `30 17 * * *` → daily 00:30 | 60 | `today` `YYYY-MM-DD` (default: WIB today; for testing the boundary) | `marked` |
 
-Slot semantics: slots 1–9 send current-month reminders only (Phase 1); slot 10 also chases overdue/prior months (Phase 2). Constants in [lib/constants.ts](lib/constants.ts).
+Slot semantics: every slot runs Phase 1 — for each invoice with a due (`scheduled_date <= today`) unsent reminder, send only its latest due reminder and cancel earlier due rows ("Digantikan pengingat terbaru"); slot 10 additionally chases overdue/prior months (Phase 2). Constants in [lib/constants.ts](lib/constants.ts).
 
 `mark-overdue` flips every `PENDING` invoice whose `due_date < today` (WIB) to `OVERDUE`. This is the calendar-driven source of the persisted `OVERDUE` ("Terlambat") status — independent of invoice generation. Invoice generation runs the same date-based sweep (its `marked_overdue` count), so the two never disagree.
 

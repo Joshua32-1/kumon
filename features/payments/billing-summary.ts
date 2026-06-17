@@ -43,7 +43,8 @@ export function getWhatsAppDeliveryStatus(
 
 /**
  * An invoice needs attention when it is unpaid AND one of:
- * - no pay link token yet, not sent, or send failed → "delivery"
+ * - no pay link token yet, not sent, send failed, or a reminder stranded past its
+ *   scheduled date (missed its send window) → "delivery"
  * - OVERDUE status, or PENDING past its due_date → "collection"
  *
  * When both conditions are true, reason is "delivery" (fix ops first).
@@ -64,11 +65,18 @@ export function getBillingAttentionWithReason(
   }
 
   const waStatus = getWhatsAppDeliveryStatus(invoice, reminders)
+  // A reminder still PENDING after its scheduled date missed its send window — normally the
+  // supersede logic cancels these, so survivors mean the cron didn't run (disabled/outage) or the
+  // invoice was created after all its reminder days. Surface it as a delivery problem.
+  const hasStrandedReminder =
+    today != null &&
+    reminders.some((r) => r.status === "PENDING" && r.scheduled_date < today)
   const isDeliveryProblem =
     waStatus === "no_link" ||
     waStatus === "link_not_sent" ||
     waStatus === "send_failed" ||
-    waStatus === "partial_failed"
+    waStatus === "partial_failed" ||
+    hasStrandedReminder
 
   const isCollectionProblem =
     invoice.status === "OVERDUE" ||

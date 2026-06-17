@@ -21,6 +21,8 @@ Verify `0006`: `SELECT conname FROM pg_constraint WHERE conname IN ('invoices_am
 
 `0010` paid-leave conflict resolutions — new `paid_leave_conflict_resolutions` table backing the dashboard "Tagihan sudah dibayar untuk bulan cuti" panel. A PAID invoice whose billing month also has a `temporary_leaves` row is a conflict, shown all-time (no month window) until an admin clicks "Tandai selesai" (one resolution row per invoice) or the cuti is cancelled. Verify: `SELECT count(*) FROM pg_policies WHERE tablename = 'paid_leave_conflict_resolutions' AND policyname = 'admin_all';` should return 1.
 
+`0012` clamp reminder days — `CREATE OR REPLACE create_invoice_with_lines` clamps each `reminder_days` value into the invoice month's `[1, last_day]` range before `make_date`, so a misconfigured day (e.g. 31) can't crash generation on short months. Verify: temporarily set `system_config.reminder_days` to `{"days":[1,11,31]}` and create a February invoice — the third reminder lands on Feb 28/29, no error.
+
 ## Enums
 
 | Enum | Values | Notes |
@@ -88,7 +90,7 @@ The central table.
 Per-subject breakdown. FK `invoice_id` (CASCADE), `subject`, `label` (display text used in WhatsApp messages), `unit_amount` (Rupiah). Unique `(invoice_id, subject)`.
 
 ### payment_reminders
-Scheduled WhatsApp reminders, created at invoice generation for the 1st/11th/21st. FK `invoice_id` and `student_id` (both CASCADE). Columns: `reminder_number` (1–3), `scheduled_date`, `sent_at`, `status` (`reminder_status`), `whatsapp_number` (snapshot), `message_preview`. The send cron claims due `PENDING` rows; `SENT` rows are skipped by later slots.
+Scheduled WhatsApp reminders, created at invoice generation for the 1st/11th/21st. FK `invoice_id` and `student_id` (both CASCADE). Columns: `reminder_number` (1–3, internal slot/order index — not shown to parents), `scheduled_date`, `sent_at`, `status` (`reminder_status`), `whatsapp_number` (snapshot), `message_preview`. The send cron processes each invoice with a due (`scheduled_date <= today`) unsent reminder and sends only its **latest** due reminder, marking earlier due rows `CANCELLED` ("Digantikan pengingat terbaru") so a reminder stranded in the past (mid-month enrollment / cuti rebill) can't fire later or out of order; `SENT` rows are skipped by later slots.
 
 ### system_config
 Singleton settings as JSONB rows — prefer a new key here over a new one-row table.
