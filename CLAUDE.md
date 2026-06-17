@@ -54,9 +54,11 @@ Every task follows these steps in order:
 npm run dev        # local dev server (http://localhost:3000)
 npm run build      # production build (also the de-facto type check)
 npx tsc --noEmit   # type check only
+npm test           # Vitest unit tests (run once)
+npm run test:watch # Vitest watch mode
 ```
 
-There is no test suite or linter — `tsc`/`build` are the only automated gates. Regenerate DB types after schema changes:
+Unit tests run with Vitest, covering the pure helpers under `lib/` (billing, timezone, Midtrans signature, cron auth); tests live next to their source as `*.test.ts`. There is no linter — `tsc`/`build` remain the type gate, and CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs both `tsc --noEmit` and `npm test`. Regenerate DB types after schema changes:
 
 ```bash
 npx supabase gen types typescript --project-id <project-id> > types/database.ts

@@ -70,6 +70,17 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) and log in with the admin user created in Supabase.
 
+### 4. Tests
+
+Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files (currently the pure billing/timezone/signature/cron-auth helpers under `lib/`).
+
+```bash
+npm test         # run once
+npm run test:watch
+```
+
+CI (`.github/workflows/ci.yml`) runs `tsc --noEmit` and `npm test` on every push and pull request. `tsc`/`build` remain the type gate; Vitest is the behavioral gate.
+
 ## Monthly billing automation
 
 Invoice generation and WhatsApp reminders run via cron API routes, scheduled by **Vercel Cron** (`vercel.json`).
