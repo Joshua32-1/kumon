@@ -32,6 +32,7 @@ If the diff adds a new domain module under `features/`, a new external service/v
 
 - Must call `verifyCronAuth` and check `isCronJobEnabled` before doing work.
 - Must be idempotent — every job can fire twice (manual + scheduled). Re-runs must be no-ops (the partial unique invoice index, `already_promoted` for grade promotion, SENT-reminder dedup across slots).
+- **Reminder send selection**: per invoice, send only the **latest** due (`scheduled_date <= today`) unsent reminder and cancel earlier due rows (`"Digantikan pengingat terbaru"`) — never send the lowest-numbered or resend a stranded/past reminder. The cron Phase 1 and the manual "Kirim WA sekarang" path must share this logic; reminder messages carry **no** "pertama/kedua/ketiga" ordinal (the `pengingat_ke` template slot was removed).
 - Schedules in `vercel.json` are **UTC**; intended times are WIB. Verify any schedule change is offset by −7 hours.
 - Long-running routes need `maxDuration` exported; batch sizes and delays come from env (`WHATSAPP_BATCH_LIMIT`, `WHATSAPP_SEND_DELAY_MS`), never hardcoded.
 
