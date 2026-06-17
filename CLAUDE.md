@@ -18,6 +18,8 @@ Project skills in `.claude/skills/` are governed by the **Skill Routing** rules 
 
 Load every skill whose trigger matches **before** doing the work in its phase. When in doubt, load the skill — a wasted read is acceptable; a missed review is not. Multiple triggers ⇒ load multiple skills.
 
+**Proposing new skills:** when a repo workflow recurs (you've done it 3+ times) and no existing skill covers it, *propose* a new skill to the user — name its trigger and the phase it slots into — and let them decide. Do not auto-create skills; creation stays a deliberate, human-approved `skill-creator` step.
+
 | Skill | Triggered by | Required phase |
 |---|---|---|
 | `dev-workflow` | Any implementation task: new feature, new endpoint/action, scaffolding a module, deciding where a change lands, running/triggering crons locally | **Before implementation** |
@@ -42,8 +44,9 @@ Every task follows these steps in order:
 2. **Load all matching skills** — read every triggered skill before writing code; pre-implementation skills (`dev-workflow`, `supabase-migrations`) first.
 3. **Implement** following the loaded skills' patterns (layering, scaffold, migration rules).
 4. **Validate** — always `npx tsc --noEmit`; for behavior changes, run the relevant `feature-testing` recipes and edge cases, including the idempotency re-run.
-5. **Review** — for any non-trivial code change (any diff under `app/`, `features/`, `lib/`, `components/`, `types/`, `proxy.ts`, `vercel.json`, `supabase/` beyond a pure typo/comment fix), spawn the `code-reviewer` agent ([.claude/agents/code-reviewer.md](.claude/agents/code-reviewer.md)) via the Agent tool, passing the change scope and the task's original requirements. It independently applies the `code-review-checklist` skill and returns Critical/Warning/Suggestion findings plus an approval status. Fix all **Critical** findings and re-run the agent until it no longer reports any; surface **Warnings** to the user. Do not self-review as a substitute.
-6. **Only then is the task complete.** A task that skipped a triggered skill, or a non-trivial change without a `code-reviewer` approval (APPROVED or APPROVED WITH WARNINGS), is not done, even if the code works.
+5. **Sync docs** — if the change altered a *documented surface*, update the matching doc **in the same change**: an endpoint, param, or curl recipe → [API.md](API.md); an enum, table, index, RPC, or `system_config` key → [DATABASE.md](DATABASE.md); a request-flow, layering, auth-boundary, or billing-lifecycle behavior → [ARCHITECTURE.md](ARCHITECTURE.md); a cron schedule or env var → whichever of the above documents it (and [README.md](README.md) if setup/usage changed); a new invariant, skill, or workflow rule → this file. If nothing documented changed, state that and move on. A change that altered documented behavior without updating its doc is not complete.
+6. **Review** — for any non-trivial code change (any diff under `app/`, `features/`, `lib/`, `components/`, `types/`, `proxy.ts`, `vercel.json`, `supabase/` beyond a pure typo/comment fix), spawn the `code-reviewer` agent ([.claude/agents/code-reviewer.md](.claude/agents/code-reviewer.md)) via the Agent tool, passing the change scope and the task's original requirements. It independently applies the `code-review-checklist` skill and returns Critical/Warning/Suggestion findings plus an approval status. Fix all **Critical** findings and re-run the agent until it no longer reports any; surface **Warnings** to the user. Do not self-review as a substitute.
+7. **Only then is the task complete.** A task that skipped a triggered skill, left a documented surface out of sync, or shipped a non-trivial change without a `code-reviewer` approval (APPROVED or APPROVED WITH WARNINGS), is not done, even if the code works.
 
 ## Commands
 
