@@ -12,5 +12,12 @@ export default defineConfig({
     environment: "node",
     include: ["**/*.test.ts"],
     exclude: ["node_modules", ".next"],
+    coverage: {
+      // Report-only: prints a summary and writes HTML, but never fails CI.
+      provider: "v8",
+      reporter: ["text", "html"],
+      include: ["lib/**", "features/**"],
+      exclude: ["**/*.test.ts", "lib/test/**"],
+    },
   },
 })
