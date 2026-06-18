@@ -15,7 +15,7 @@ import {
   type PaymentWhatsAppContext,
 } from "@/features/messaging/service"
 import { Errors } from "@/lib/errors"
-import { DEFAULT_REMINDER_DAYS } from "@/lib/constants"
+import { DEFAULT_REMINDER_DAYS, BILLABLE_STUDENT_STATUSES } from "@/lib/constants"
 import {
   toDateString,
   lastDayOfMonth,
@@ -101,9 +101,6 @@ function paymentWhatsAppContext(
       invoice?.school_level_at_billing ?? student.school_level ?? "ELEMENTARY",
   }
 }
-
-/** Students eligible for billing/reminders (excludes withdrawn students only). */
-const BILLABLE_STUDENT_STATUSES = ["ACTIVE", "TEMPORARY_LEAVE"] as const
 
 function assertSupabaseOk(error: { message: string } | null, context: string): void {
   if (error) throw Errors.INTERNAL(`Failed to update ${context}: ${error.message}`)

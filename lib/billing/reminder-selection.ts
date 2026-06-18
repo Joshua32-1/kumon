@@ -35,6 +35,9 @@ export function isOverdueChaseEligible(options: {
  * - scheduled path → the HIGHEST reminder_number (most recent slot), so a row
  *   stranded in the past is sent once and never out of order
  * - ignoreSchedule (bulk send) → the LOWEST reminder_number (original behavior)
+ *
+ * Ties are not expected — reminder_number is unique per invoice — so the sort
+ * order fully determines the pick (mirrors the SQL `ORDER BY reminder_number`).
  */
 export function selectDueReminder<T extends { reminder_number: number }>(
   reminders: T[],
