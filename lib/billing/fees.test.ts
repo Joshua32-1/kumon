@@ -3,6 +3,8 @@ import {
   computeInvoiceLineItems,
   parseSubjectFees,
   formatLineItemsForMessage,
+  formatStudentEnrollmentForWhatsApp,
+  formatPaymentDetailsForWhatsApp,
   DEFAULT_SUBJECT_FEES,
 } from "@/lib/billing/fees"
 
@@ -69,5 +71,43 @@ describe("formatLineItemsForMessage", () => {
     expect(lines[0]).toContain("English")
     expect(lines[0]).toContain("480")
     expect(lines[0].startsWith("•")).toBe(true)
+  })
+})
+
+describe("formatStudentEnrollmentForWhatsApp", () => {
+  it("lists the student's level and subjects", () => {
+    const text = formatStudentEnrollmentForWhatsApp("Budi", "ELEMENTARY", [
+      "English",
+      "Matematika",
+    ])
+    expect(text).toContain("Nama: Budi")
+    expect(text).toContain("Tingkat: TK/SD")
+    expect(text).toContain("Mata pelajaran: English, Matematika")
+  })
+
+  it("falls back to a dash when there are no subjects", () => {
+    const text = formatStudentEnrollmentForWhatsApp("Budi", "SECONDARY", [])
+    expect(text).toContain("Tingkat: SMP/SMA")
+    expect(text).toContain("Mata pelajaran: —")
+  })
+})
+
+describe("formatPaymentDetailsForWhatsApp", () => {
+  it("includes the per-subject breakdown when line items are present", () => {
+    const text = formatPaymentDetailsForWhatsApp(
+      "Juni",
+      2026,
+      [{ label: "English", unit_amount: 480_000 }],
+      "Rp960.000",
+      "belum dibayar"
+    )
+    expect(text).toContain("SPP Kumon bulan Juni 2026")
+    expect(text).toContain("• English")
+    expect(text).toContain("Total: *Rp960.000* — belum dibayar.")
+  })
+
+  it("falls back to a total-only line when there are no line items", () => {
+    const text = formatPaymentDetailsForWhatsApp("Juni", 2026, [], "Rp960.000", "sudah dibayar")
+    expect(text).toBe("SPP Kumon bulan Juni 2026 sebesar *Rp960.000* — sudah dibayar.")
   })
 })

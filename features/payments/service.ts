@@ -15,15 +15,13 @@ import {
   type PaymentWhatsAppContext,
 } from "@/features/messaging/service"
 import { Errors } from "@/lib/errors"
-import { DEFAULT_REMINDER_DAYS } from "@/lib/constants"
+import { DEFAULT_REMINDER_DAYS, BILLABLE_STUDENT_STATUSES } from "@/lib/constants"
 import {
   toDateString,
   lastDayOfMonth,
   todayInCenterTimezone,
-  dayOfMonthFromDateString,
   monthYearFromDateString,
   currentMonthYearInCenterTimezone,
-  isPriorBillingPeriod,
 } from "@/lib/utils"
 import {
   computeInvoiceLineItems,
@@ -67,10 +65,29 @@ import {
   getWhatsAppDeliveryStatus,
   type WhatsAppDeliveryStatus,
 } from "./billing-summary"
+import { DEFAULT_GENERATE_CATEGORIES } from "./types"
 import {
-  DEFAULT_GENERATE_CATEGORIES,
-  GENERATABLE_INVOICE_CATEGORIES,
-} from "./types"
+  decideMidtransSettlement,
+  isValidMidtransSettlement,
+  appendOrderId,
+} from "@/lib/payments/settlement"
+import { evaluatePayPageAccess } from "@/lib/payments/pay-page"
+import { isWithinSnapPageWindow, isExpiryTimeInFuture } from "@/lib/midtrans/expiry"
+import { isRetryableMidtransError } from "@/lib/midtrans/errors"
+import {
+  getStudentSubjects,
+  evaluateStudentBillingEligibility,
+  getEffectiveInvoiceStatus,
+  canGenerateInvoiceForStudent,
+  studentMatchesGenerateCategories,
+  type InvoiceStatusRow,
+  type StudentSubjectRow,
+} from "@/lib/billing/generate-eligibility"
+import {
+  isReminderDay,
+  isOverdueChaseEligible,
+  selectDueReminder,
+} from "@/lib/billing/reminder-selection"
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServerClient>>
 
@@ -85,132 +102,12 @@ function paymentWhatsAppContext(
   }
 }
 
-const BLOCKING_INVOICE_STATUSES = ["CANCELLED", "PAID_OLD_LINK"] as const
-
-/** Students eligible for billing/reminders (excludes withdrawn students only). */
-const BILLABLE_STUDENT_STATUSES = ["ACTIVE", "TEMPORARY_LEAVE"] as const
-
-type InvoiceStatusRow = { student_id: string; status: PaymentStatus; created_at: string }
-
-type StudentSubjectRow = { subject: KumonSubject; enrolled_at: string }
-
-function getStudentSubjects(student: {
-  student_subjects?: StudentSubjectRow[] | null
-}): StudentSubjectRow[] {
-  return (student.student_subjects ?? []).map((ss) => ({
-    subject: ss.subject,
-    enrolled_at: ss.enrolled_at,
-  }))
-}
-
-function evaluateStudentBillingEligibility(options: {
-  enrolledAt: string
-  subjects: StudentSubjectRow[]
-  billingMonth: number
-  billingYear: number
-  onLeave: boolean
-  invoiceStatus: PaymentStatus | null
-}) {
-  const beforeEnrollment = isBillingPeriodBeforeEnrollment(
-    options.enrolledAt,
-    options.billingMonth,
-    options.billingYear
-  )
-  const billableSubjects = beforeEnrollment
-    ? []
-    : filterSubjectsForBillingPeriod(
-        options.subjects,
-        options.billingMonth,
-        options.billingYear
-      )
-  const hasSubjects = billableSubjects.length > 0
-  const canGenerate =
-    !beforeEnrollment &&
-    canGenerateInvoiceForStudent({
-      onLeave: options.onLeave,
-      hasSubjects,
-      invoiceStatus: options.invoiceStatus,
-    })
-
-  return { beforeEnrollment, hasSubjects, billableSubjects, canGenerate }
-}
-
-function getEffectiveInvoiceStatus(
-  invoices: InvoiceStatusRow[]
-): PaymentStatus | null {
-  if (invoices.length === 0) return null
-
-  const active = invoices.find(
-    (inv) => !BLOCKING_INVOICE_STATUSES.includes(inv.status as (typeof BLOCKING_INVOICE_STATUSES)[number])
-  )
-  if (active) return active.status
-
-  const sorted = [...invoices].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  )
-  return sorted[0]?.status ?? null
-}
-
-function invoiceStatusToCategory(status: PaymentStatus | null): GenerateInvoiceCategory {
-  return status ?? "no_invoice"
-}
-
-function canGenerateInvoiceForStudent(options: {
-  onLeave: boolean
-  hasSubjects: boolean
-  invoiceStatus: PaymentStatus | null
-}): boolean {
-  if (options.onLeave || !options.hasSubjects) return false
-  const category = invoiceStatusToCategory(options.invoiceStatus)
-  return GENERATABLE_INVOICE_CATEGORIES.includes(category)
-}
-
-function studentMatchesGenerateCategories(
-  invoiceStatus: PaymentStatus | null,
-  categories: GenerateInvoiceCategory[]
-): boolean {
-  return categories.includes(invoiceStatusToCategory(invoiceStatus))
-}
-
-function appendOrderId(existing: string[] | null | undefined, orderId: string): string[] {
-  const ids = existing ?? []
-  if (ids.includes(orderId)) return ids
-  return [...ids, orderId]
-}
-
 function assertSupabaseOk(error: { message: string } | null, context: string): void {
   if (error) throw Errors.INTERNAL(`Failed to update ${context}: ${error.message}`)
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function getErrorStatusCode(err: unknown): number | undefined {
-  if (err && typeof err === "object" && "statusCode" in err) {
-    return (err as { statusCode: number }).statusCode
-  }
-  return undefined
-}
-
-function isRetryableMidtransError(err: unknown): boolean {
-  const statusCode = getErrorStatusCode(err)
-  if (
-    statusCode === 429 ||
-    statusCode === 502 ||
-    statusCode === 503 ||
-    statusCode === 504
-  ) {
-    return true
-  }
-  const message = (err instanceof Error ? err.message : String(err)).toLowerCase()
-  return (
-    message.includes("rate limit") ||
-    message.includes("too many") ||
-    message.includes("timeout") ||
-    message.includes("econnreset") ||
-    message.includes("etimedout")
-  )
 }
 
 async function withMidtransRetry<T>(
@@ -242,22 +139,6 @@ function getMidtransPageExpiryHours(): number {
   return Number(process.env.MIDTRANS_PAGE_EXPIRY_HOURS ?? 24)
 }
 
-function isWithinSnapPageWindow(snapCreatedAt: string | null): boolean {
-  if (!snapCreatedAt) return false
-  const expiryMs = getMidtransPageExpiryHours() * 60 * 60 * 1000
-  return Date.now() - new Date(snapCreatedAt).getTime() < expiryMs
-}
-
-function parseMidtransExpiryTime(expiryTime: string): number {
-  if (expiryTime.includes("T")) return new Date(expiryTime).getTime()
-  return new Date(`${expiryTime.replace(" ", "T")}+07:00`).getTime()
-}
-
-function isExpiryTimeInFuture(expiryTime: string | undefined): boolean {
-  if (!expiryTime) return false
-  return parseMidtransExpiryTime(expiryTime) > Date.now()
-}
-
 async function isMidtransCheckoutReusable(
   invoice: Pick<
     Invoice,
@@ -270,7 +151,7 @@ async function isMidtransCheckoutReusable(
   const status = await getMidtransTransactionStatus(midtrans_order_id)
 
   if (!status) {
-    return isWithinSnapPageWindow(midtrans_snap_created_at)
+    return isWithinSnapPageWindow(midtrans_snap_created_at, getMidtransPageExpiryHours())
   }
 
   if (
@@ -282,7 +163,7 @@ async function isMidtransCheckoutReusable(
 
   if (status.transaction_status === "pending") {
     if (status.expiry_time && isExpiryTimeInFuture(status.expiry_time)) return true
-    return isWithinSnapPageWindow(midtrans_snap_created_at)
+    return isWithinSnapPageWindow(midtrans_snap_created_at, getMidtransPageExpiryHours())
   }
 
   return false
@@ -312,66 +193,40 @@ async function applyMidtransSettlement(
   invoice: Invoice,
   payload: MidtransSettlementInput
 ): Promise<MidtransWebhookResult> {
-  if (invoice.status === "PAID" || invoice.status === "PAID_OLD_LINK") {
-    return { handled: true, status: invoice.status, sendConfirmation: false }
+  const decision = decideMidtransSettlement({
+    currentStatus: invoice.status,
+    isCurrentOrder: invoice.midtrans_order_id === payload.order_id,
+    orderInHistory: (invoice.midtrans_order_ids ?? []).includes(payload.order_id),
+  })
+
+  if (decision.action === "already_settled") {
+    return { handled: true, status: decision.status, sendConfirmation: false }
   }
 
-  const isCurrentOrder = invoice.midtrans_order_id === payload.order_id
-  const orderInHistory = (invoice.midtrans_order_ids ?? []).includes(payload.order_id)
-
-  if (!isCurrentOrder && !orderInHistory) {
+  if (decision.action === "unrelated") {
     return { handled: false, sendConfirmation: false }
   }
 
-  const paidAt = new Date().toISOString()
-  const baseUpdate = {
-    paid_at: paidAt,
-    midtrans_transaction_id: payload.transaction_id ?? null,
-  }
+  const { error } = await supabaseAdmin
+    .from("invoices")
+    .update({
+      paid_at: new Date().toISOString(),
+      midtrans_transaction_id: payload.transaction_id ?? null,
+      status: decision.newStatus,
+    })
+    .eq("id", invoice.id)
+  assertSupabaseOk(error, "invoice")
 
-  if (invoice.status === "CANCELLED" || invoice.status === "WAIVED") {
-    const { error } = await supabaseAdmin
-      .from("invoices")
-      .update({ ...baseUpdate, status: "PAID_OLD_LINK" })
-      .eq("id", invoice.id)
-    assertSupabaseOk(error, "invoice")
-
-    return { handled: true, status: "PAID_OLD_LINK", sendConfirmation: false, invoiceId: invoice.id }
-  }
-
-  if (
-    (invoice.status === "PENDING" || invoice.status === "OVERDUE") &&
-    !isCurrentOrder
-  ) {
-    const { error: invoiceError } = await supabaseAdmin
-      .from("invoices")
-      .update({ ...baseUpdate, status: "PAID_OLD_LINK" })
-      .eq("id", invoice.id)
-    assertSupabaseOk(invoiceError, "invoice")
-
+  if (decision.cancelReminders) {
     await cancelPendingReminders(invoice.id, "Tagihan sudah lunas", supabaseAdmin)
-
-    return { handled: true, status: "PAID_OLD_LINK", sendConfirmation: false, invoiceId: invoice.id }
   }
 
-  if (invoice.status === "PENDING" || invoice.status === "OVERDUE") {
-    const { error: invoiceError } = await supabaseAdmin
-      .from("invoices")
-      .update({ ...baseUpdate, status: "PAID" })
-      .eq("id", invoice.id)
-    assertSupabaseOk(invoiceError, "invoice")
-
-    await cancelPendingReminders(invoice.id, "Tagihan sudah lunas", supabaseAdmin)
-
-    return {
-      handled: true,
-      status: "PAID",
-      sendConfirmation: true,
-      invoiceId: invoice.id,
-    }
+  return {
+    handled: true,
+    status: decision.newStatus,
+    sendConfirmation: decision.sendConfirmation,
+    invoiceId: invoice.id,
   }
-
-  return { handled: false, sendConfirmation: false }
 }
 
 async function loadReminderDays(
@@ -912,72 +767,36 @@ export const paymentService = {
       }
     }
 
-    if (invoice.status === "PAID" || invoice.status === "PAID_OLD_LINK") {
-      return {
-        kind: "message",
-        title: "Sudah lunas",
-        body: "Tagihan ini sudah dibayar. Terima kasih.",
-      }
-    }
-
+    // Resolve the leave flag only for CANCELLED invoices (to distinguish cuti
+    // from a manual cancel) and the student status only for payable invoices —
+    // preserving the original conditional DB-call pattern.
+    let hasLeaveForPeriod = false
     if (invoice.status === "CANCELLED") {
-      // Cancelled because of cuti? Tell the parent there's nothing to pay
-      // instead of the generic "contact the center" message.
       const { count: leaveCount } = await supabaseAdmin
         .from("temporary_leaves")
         .select("*", { count: "exact", head: true })
         .eq("student_id", invoice.student_id)
         .eq("month", invoice.month)
         .eq("year", invoice.year)
-
-      if ((leaveCount ?? 0) > 0) {
-        return {
-          kind: "message",
-          title: "Siswa sedang cuti",
-          body: "Siswa sedang cuti pada bulan ini, jadi tidak ada tagihan yang perlu dibayar. Hubungi pusat Kumon jika ada pertanyaan.",
-        }
-      }
-
-      return {
-        kind: "message",
-        title: "Tagihan dibatalkan",
-        body: "Tagihan ini telah dibatalkan. Hubungi pusat Kumon jika ada pertanyaan.",
-      }
+      hasLeaveForPeriod = (leaveCount ?? 0) > 0
     }
 
-    if (invoice.status === "WAIVED") {
-      return {
-        kind: "message",
-        title: "Tagihan dibebaskan",
-        body: "Tagihan ini telah dibebaskan. Tidak perlu melakukan pembayaran.",
-      }
+    let studentStatus: string | undefined
+    if (invoice.status === "PENDING" || invoice.status === "OVERDUE") {
+      const { data: student } = await supabaseAdmin
+        .from("students")
+        .select("status")
+        .eq("id", invoice.student_id)
+        .single()
+      studentStatus = student?.status as string | undefined
     }
 
-    if (invoice.status !== "PENDING" && invoice.status !== "OVERDUE") {
-      return {
-        kind: "message",
-        title: "Tidak dapat membayar",
-        body: "Tagihan ini tidak dapat dibayar saat ini.",
-      }
-    }
-
-    const { data: student } = await supabaseAdmin
-      .from("students")
-      .select("status")
-      .eq("id", invoice.student_id)
-      .single()
-
-    const studentStatus = student?.status as string | undefined
-    if (
-      !studentStatus ||
-      !(BILLABLE_STUDENT_STATUSES as readonly string[]).includes(studentStatus)
-    ) {
-      return {
-        kind: "message",
-        title: "Tidak dapat membayar",
-        body: "Status siswa tidak aktif. Hubungi pusat Kumon untuk bantuan.",
-      }
-    }
+    const access = evaluatePayPageAccess({
+      invoiceStatus: invoice.status,
+      hasLeaveForPeriod,
+      studentStatus,
+    })
+    if (access.kind === "message") return access
 
     const redirectUrl = await paymentService.resolveMidtransCheckout(invoice.id)
     return { kind: "redirect", url: redirectUrl }
@@ -1332,17 +1151,16 @@ export const paymentService = {
       // so a reminder stranded in the past (mid-month enrollment, cuti rebill) is never resurrected
       // or mislabeled. The bulk link-send path (ignoreSchedule) keeps its original lowest-first,
       // no-supersede behavior so it doesn't cancel still-scheduled reminders.
-      const ascending = ignoreSchedule
       let q = supabaseAdmin
         .from("payment_reminders")
         .select("*")
         .eq("invoice_id", invoiceId)
         .in("status", ["PENDING", "FAILED"])
-        .order("reminder_number", { ascending })
-        .limit(1)
       if (!ignoreSchedule) q = q.lte("scheduled_date", today)
       const { data: rows } = await q
-      targetReminder = rows?.[0] ? (rows[0] as PaymentReminder) : null
+      targetReminder = selectDueReminder((rows ?? []) as PaymentReminder[], {
+        ignoreSchedule,
+      })
 
       // Cancel older due reminders so they can't fire later (a subsequent cron slot or manual send)
       // or be sent out of order. Mirrors ensureOverdueCatchUpReminder's stale-row cancellation.
@@ -1359,10 +1177,13 @@ export const paymentService = {
 
     if (!targetReminder && ignoreSchedule) {
       const { month: currentMonth, year: currentYear } = monthYearFromDateString(today)
-      const chaseableUnpaid =
-        invoice.status === "OVERDUE" ||
-        (invoice.status === "PENDING" &&
-          isPriorBillingPeriod(invoice.month, invoice.year, currentMonth, currentYear))
+      const chaseableUnpaid = isOverdueChaseEligible({
+        status: invoice.status,
+        month: invoice.month,
+        year: invoice.year,
+        currentMonth,
+        currentYear,
+      })
       if (chaseableUnpaid) {
         targetReminder = await ensureOverdueCatchUpReminder(
           invoiceId,
@@ -1499,8 +1320,7 @@ export const paymentService = {
     }
 
     // Phase 2: prior-month OVERDUE invoices on each global reminder day (1 / 11 / 21)
-    const dayOfMonth = dayOfMonthFromDateString(today)
-    if (!includeOverdueChase || !reminderDays.includes(dayOfMonth)) {
+    if (!includeOverdueChase || !isReminderDay(today, reminderDays)) {
       return result
     }
 
@@ -1521,11 +1341,15 @@ export const paymentService = {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const inv = row as any
-      if (inv.status === "PENDING") {
-        if (!isPriorBillingPeriod(inv.month, inv.year, currentMonth, currentYear)) {
-          continue
-        }
-      } else if (inv.status !== "OVERDUE") {
+      if (
+        !isOverdueChaseEligible({
+          status: inv.status,
+          month: inv.month,
+          year: inv.year,
+          currentMonth,
+          currentYear,
+        })
+      ) {
         continue
       }
 
@@ -1846,12 +1670,9 @@ export const paymentService = {
   },
 
   async handleMidtransWebhook(payload: MidtransWebhookPayload): Promise<MidtransWebhookResult> {
-    const isSuccess =
-      payload.transaction_status === "settlement" ||
-      payload.transaction_status === "capture"
-    const isFraud = payload.fraud_status === "deny"
-
-    if (!isSuccess || isFraud) return { handled: false, sendConfirmation: false }
+    if (!isValidMidtransSettlement(payload.transaction_status, payload.fraud_status)) {
+      return { handled: false, sendConfirmation: false }
+    }
 
     const invoice = await paymentService.findInvoiceByMidtransOrderId(payload.order_id)
     if (!invoice) return { handled: false, sendConfirmation: false }
@@ -1905,11 +1726,9 @@ export const paymentService = {
       const status = await getMidtransTransactionStatus(orderId)
       if (!status) continue
 
-      const isSuccess =
-        status.transaction_status === "settlement" ||
-        status.transaction_status === "capture"
-      const isFraud = status.fraud_status === "deny"
-      if (!isSuccess || isFraud) continue
+      if (!isValidMidtransSettlement(status.transaction_status, status.fraud_status)) {
+        continue
+      }
 
       const result = await applyMidtransSettlement(inv, {
         order_id: orderId,

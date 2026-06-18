@@ -72,7 +72,7 @@ Open [http://localhost:3000](http://localhost:3000) and log in with the admin us
 
 ### 4. Tests
 
-Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing, timezone, signature, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
+Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
 
 ```bash
 npm test            # run once
