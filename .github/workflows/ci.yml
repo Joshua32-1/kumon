@@ -19,3 +19,5 @@ jobs:
         run: npx tsc --noEmit
       - name: Run tests
         run: npm test
+      - name: Coverage report (non-blocking)
+        run: npm run test:coverage

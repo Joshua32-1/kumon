@@ -72,14 +72,15 @@ Open [http://localhost:3000](http://localhost:3000) and log in with the admin us
 
 ### 4. Tests
 
-Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files (currently the pure billing/timezone/signature/cron-auth helpers under `lib/`).
+Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing, timezone, signature, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
 
 ```bash
-npm test         # run once
+npm test            # run once
 npm run test:watch
+npm run test:coverage  # run once + coverage report (text + HTML in coverage/)
 ```
 
-CI (`.github/workflows/ci.yml`) runs `tsc --noEmit` and `npm test` on every push and pull request. `tsc`/`build` remain the type gate; Vitest is the behavioral gate.
+CI (`.github/workflows/ci.yml`) runs `tsc --noEmit` and `npm test` on every push and pull request, then prints a coverage summary (non-blocking — coverage does not gate merges). `tsc`/`build` remain the type gate; Vitest is the behavioral gate.
 
 ## Monthly billing automation
 
