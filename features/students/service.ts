@@ -1,15 +1,19 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase/admin"
 import { Errors } from "@/lib/errors"
-import { todayInCenterTimezone, currentMonthYearInCenterTimezone } from "@/lib/utils"
+import {
+  todayInCenterTimezone,
+  currentMonthYearInCenterTimezone,
+  isSameBillingPeriod,
+} from "@/lib/utils"
 import { gradeToSchoolLevel } from "@/lib/billing/grades"
 import {
-  getCurrentLeaveStreakPeriod,
-  currentConsecutiveLeaveStreak,
-  needsLeaveReview,
+  buildLeaveReviewAlert,
   parseMaxLeaveMonthsConfig,
   type LeaveMonth,
 } from "@/lib/billing/leaves"
+import { buildSetLeaveBulkResult } from "@/lib/students/bulk-leave"
+import { buildLeaveExclusionFilter } from "@/lib/students/sync-leave"
 import type {
   Student,
   StudentDetail,
@@ -22,32 +26,12 @@ import type {
   StudentSubject,
   Contact,
   PromoteGradesResult,
-  LeaveReviewAlert,
   LeaveReviewListResult,
   LeaveReviewStudent,
   SetLeaveBulkResult,
-  BulkLeaveUnpaidInvoice,
 } from "./types"
 
 type StudentSupabase = Awaited<ReturnType<typeof createSupabaseServerClient>>
-
-function buildLeaveReviewAlert(
-  leaves: LeaveMonth[],
-  maxConsecutive: number
-): LeaveReviewAlert | null {
-  if (!needsLeaveReview(leaves, maxConsecutive)) return null
-  const period = getCurrentLeaveStreakPeriod(leaves)
-  if (!period) return null
-
-  return {
-    consecutive_months: currentConsecutiveLeaveStreak(leaves),
-    max_consecutive_months: maxConsecutive,
-    period_start_month: period.start.month,
-    period_start_year: period.start.year,
-    period_end_month: period.end.month,
-    period_end_year: period.end.year,
-  }
-}
 
 export const studentService = {
   async list(filters: StudentFilters = {}): Promise<Student[]> {
@@ -339,7 +323,7 @@ export const studentService = {
 
     // Status reflects the current WIB month only; future/past leaves don't change it.
     const { month: currentMonth, year: currentYear } = currentMonthYearInCenterTimezone()
-    if (month === currentMonth && year === currentYear) {
+    if (isSameBillingPeriod(month, year, currentMonth, currentYear)) {
       await supabase
         .from("students")
         .update({ status: "TEMPORARY_LEAVE" })
@@ -418,17 +402,9 @@ export const studentService = {
     if (eligibleError) throw Errors.INTERNAL(eligibleError.message)
 
     const eligibleIds = (eligible ?? []).map((s) => s.id)
-    const skippedIneligible = studentIds.length - eligibleIds.length
 
     if (eligibleIds.length === 0) {
-      return {
-        created: 0,
-        skipped_existing: 0,
-        skipped_ineligible: skippedIneligible,
-        unpaid_invoices: [],
-        cancelled_invoices: [],
-        paid_invoices: [],
-      }
+      return buildSetLeaveBulkResult({ studentIds, eligibleIds, created: 0, invoiceRows: [] })
     }
 
     const { data: inserted, error: insertError } = await supabase
@@ -450,7 +426,7 @@ export const studentService = {
     const created = inserted?.length ?? 0
 
     const { month: currentMonth, year: currentYear } = currentMonthYearInCenterTimezone()
-    if (month === currentMonth && year === currentYear) {
+    if (isSameBillingPeriod(month, year, currentMonth, currentYear)) {
       await supabase
         .from("students")
         .update({ status: "TEMPORARY_LEAVE" })
@@ -466,23 +442,12 @@ export const studentService = {
       .in("student_id", eligibleIds)
       .in("status", ["PENDING", "OVERDUE", "PAID"])
 
-    const reported: BulkLeaveUnpaidInvoice[] = (invoiceRows ?? []).map((row) => ({
-      invoice_id: row.id,
-      student_id: row.student_id,
-      student_name: (row.students as unknown as { full_name: string } | null)?.full_name ?? "",
-      amount: row.amount,
-      status: row.status as BulkLeaveUnpaidInvoice["status"],
-    }))
-
-    return {
+    return buildSetLeaveBulkResult({
+      studentIds,
+      eligibleIds,
       created,
-      skipped_existing: eligibleIds.length - created,
-      skipped_ineligible: skippedIneligible,
-      unpaid_invoices: reported.filter((inv) => inv.status !== "PAID"),
-      // Filled by the action when the admin opted into cancellation.
-      cancelled_invoices: [],
-      paid_invoices: reported.filter((inv) => inv.status === "PAID"),
-    }
+      invoiceRows: invoiceRows ?? [],
+    })
   },
 
   /**
@@ -525,14 +490,9 @@ export const studentService = {
       .update({ status: "ACTIVE" })
       .eq("status", "TEMPORARY_LEAVE")
 
-    if (onLeaveIds.length > 0) {
-      // UUID list goes into the PostgREST query string — fine at single-center
-      // scale (tens of concurrent leaves), revisit if that assumption breaks.
-      reactivateQuery = reactivateQuery.not(
-        "id",
-        "in",
-        `(${onLeaveIds.map((id) => `"${id}"`).join(",")})`
-      )
+    const exclusion = buildLeaveExclusionFilter(onLeaveIds)
+    if (exclusion) {
+      reactivateQuery = reactivateQuery.not("id", "in", exclusion)
     }
 
     const { data: reactivatedRows, error: reactivateError } = await reactivateQuery.select("id")

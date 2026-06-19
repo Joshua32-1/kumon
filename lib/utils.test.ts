@@ -7,6 +7,7 @@ import {
   dayOfMonthFromDateString,
   monthYearFromDateString,
   isPriorBillingPeriod,
+  isSameBillingPeriod,
 } from "@/lib/utils"
 
 // The WIB (Asia/Jakarta, UTC+7) invariant is the project's #1 hard rule. These
@@ -87,5 +88,30 @@ describe("isPriorBillingPeriod", () => {
 
   it("is false for a later period", () => {
     expect(isPriorBillingPeriod(1, 2026, 12, 2025)).toBe(false)
+  })
+})
+
+describe("isSameBillingPeriod", () => {
+  it("is true only when both month and year match", () => {
+    expect(isSameBillingPeriod(6, 2026, 6, 2026)).toBe(true)
+  })
+
+  it("is false when the month differs", () => {
+    expect(isSameBillingPeriod(5, 2026, 6, 2026)).toBe(false)
+    expect(isSameBillingPeriod(7, 2026, 6, 2026)).toBe(false)
+  })
+
+  it("is false when the year differs", () => {
+    expect(isSameBillingPeriod(6, 2025, 6, 2026)).toBe(false)
+  })
+
+  it("is false across the December/January boundary", () => {
+    expect(isSameBillingPeriod(12, 2025, 1, 2026)).toBe(false)
+    expect(isSameBillingPeriod(1, 2026, 12, 2025)).toBe(false)
+  })
+
+  it("is the complement of isPriorBillingPeriod for the current period", () => {
+    expect(isSameBillingPeriod(6, 2026, 6, 2026)).toBe(true)
+    expect(isPriorBillingPeriod(6, 2026, 6, 2026)).toBe(false)
   })
 })
