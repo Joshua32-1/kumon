@@ -1,3 +1,5 @@
+import type { LeaveReviewAlert } from "@/features/students/types"
+
 /** Calendar month on temporary leave (1–12). */
 export type LeaveMonth = { month: number; year: number }
 
@@ -81,4 +83,27 @@ export function needsLeaveReview(leaves: LeaveMonth[], maxConsecutive: number): 
 export function parseMaxLeaveMonthsConfig(value: unknown): number {
   const months = (value as { months?: number } | null)?.months
   return typeof months === "number" && months > 0 ? months : DEFAULT_MAX_CONSECUTIVE_LEAVE_MONTHS
+}
+
+/**
+ * Builds the leave-review alert for a student's leave history, or `null` when no
+ * review is warranted (streak below the limit, or no streak at all). The alert
+ * describes the current consecutive streak and its inclusive period.
+ */
+export function buildLeaveReviewAlert(
+  leaves: LeaveMonth[],
+  maxConsecutive: number
+): LeaveReviewAlert | null {
+  if (!needsLeaveReview(leaves, maxConsecutive)) return null
+  const period = getCurrentLeaveStreakPeriod(leaves)
+  if (!period) return null
+
+  return {
+    consecutive_months: currentConsecutiveLeaveStreak(leaves),
+    max_consecutive_months: maxConsecutive,
+    period_start_month: period.start.month,
+    period_start_year: period.start.year,
+    period_end_month: period.end.month,
+    period_end_year: period.end.year,
+  }
 }

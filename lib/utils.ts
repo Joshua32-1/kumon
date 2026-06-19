@@ -102,3 +102,13 @@ export function isPriorBillingPeriod(
     (invoiceYear === currentYear && invoiceMonth < currentMonth)
   )
 }
+
+/** True when (month, year) is exactly the given current billing period. */
+export function isSameBillingPeriod(
+  month: number,
+  year: number,
+  currentMonth: number,
+  currentYear: number
+): boolean {
+  return month === currentMonth && year === currentYear
+}

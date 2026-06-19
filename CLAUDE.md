@@ -59,7 +59,7 @@ npm run test:watch # Vitest watch mode
 npm run test:coverage # tests + coverage report (text + HTML in coverage/)
 ```
 
-Unit tests run with Vitest, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, cron auth) and `features/` (billing summary, validations); tests live next to their source as `*.test.ts`, with shared fixtures in `lib/test/factories.ts`. There is no linter — `tsc`/`build` remain the type gate, and CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `tsc --noEmit` and `npm test`, then prints a non-blocking coverage summary (coverage does not gate merges). Regenerate DB types after schema changes:
+Unit tests run with Vitest, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, cron auth) and `features/` (billing summary, validations); tests live next to their source as `*.test.ts`, with shared fixtures in `lib/test/factories.ts`. There is no linter — `tsc`/`build` remain the type gate, and CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `tsc --noEmit` and `npm test`, then prints a non-blocking coverage summary (coverage does not gate merges). Regenerate DB types after schema changes:
 
 ```bash
 npx supabase gen types typescript --project-id <project-id> > types/database.ts

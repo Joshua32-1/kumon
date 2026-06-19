@@ -1,31 +1,22 @@
-import { formatRupiah, getMonthName } from "@/lib/utils"
-import {
-  formatPaymentDetailsForWhatsApp,
-  formatStudentEnrollmentForWhatsApp,
-  type InvoiceLineItem,
-  type SchoolLevel,
-} from "@/lib/billing/fees"
+import type { SchoolLevel } from "@/lib/billing/fees"
 import type { MessagingProvider, MessageResult, TemplateComponent } from "./types"
 import type { Invoice } from "@/features/payments/types"
 import type { Contact } from "@/features/students/types"
+import {
+  buildPaymentReminderMessage,
+  buildPaymentConfirmationMessage,
+  buildReminderTemplateComponents,
+  buildConfirmationTemplateComponents,
+  type LineItemInput,
+} from "@/lib/messaging/templates"
 
-type LineItemInput = Pick<InvoiceLineItem, "label" | "unit_amount">
+// Re-exported for back-compat: features/payments/service.ts imports
+// buildPaymentReminderMessage from this module.
+export { buildPaymentReminderMessage, buildPaymentConfirmationMessage }
 
 export interface PaymentWhatsAppContext {
   studentName: string
   schoolLevel: SchoolLevel
-}
-
-function normalizeLineItems(
-  items: Array<Partial<LineItemInput> & { label?: string; unit_amount?: number }>
-): LineItemInput[] {
-  return items
-    .filter((i) => i.label != null && i.unit_amount != null)
-    .map((i) => ({ label: i.label!, unit_amount: i.unit_amount! }))
-}
-
-function subjectLabelsFromLineItems(lineItems: LineItemInput[]): string[] {
-  return lineItems.map((l) => l.label)
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────
@@ -130,85 +121,6 @@ function getProvider(): MessagingProvider {
   return new MetaCloudProvider()
 }
 
-// ── Message templates ──────────────────────────────────────────────────────
-
-export function buildPaymentReminderMessage(params: {
-  contactName: string
-  studentName: string
-  schoolLevel: SchoolLevel
-  invoice: Invoice
-  paymentUrl: string
-  lineItems: Array<Partial<LineItemInput>>
-}): string {
-  const {
-    contactName,
-    studentName,
-    schoolLevel,
-    invoice,
-    paymentUrl,
-    lineItems,
-  } = params
-  const normalized = normalizeLineItems(lineItems)
-  const monthName = getMonthName(invoice.month)
-  const total = formatRupiah(invoice.amount)
-
-  const enrollment = formatStudentEnrollmentForWhatsApp(
-    studentName,
-    schoolLevel,
-    subjectLabelsFromLineItems(normalized)
-  )
-  const details = formatPaymentDetailsForWhatsApp(
-    monthName,
-    invoice.year,
-    normalized,
-    total,
-    "belum kami terima"
-  )
-
-  return (
-    `Halo Bapak/Ibu ${contactName},\n\n` +
-    `Ini adalah pengingat pembayaran untuk siswa ${studentName}:\n\n` +
-    `${enrollment}\n\n` +
-    `${details}\n\n` +
-    `Silakan bayar melalui link berikut:\n${paymentUrl}\n\n` +
-    `Terima kasih 🙏`
-  )
-}
-
-export function buildPaymentConfirmationMessage(params: {
-  contactName: string
-  studentName: string
-  schoolLevel: SchoolLevel
-  invoice: Invoice
-  lineItems: Array<Partial<LineItemInput>>
-}): string {
-  const { contactName, studentName, schoolLevel, invoice, lineItems } = params
-  const normalized = normalizeLineItems(lineItems)
-  const monthName = getMonthName(invoice.month)
-  const total = formatRupiah(invoice.amount)
-
-  const enrollment = formatStudentEnrollmentForWhatsApp(
-    studentName,
-    schoolLevel,
-    subjectLabelsFromLineItems(normalized)
-  )
-  const details = formatPaymentDetailsForWhatsApp(
-    monthName,
-    invoice.year,
-    normalized,
-    total,
-    "telah kami terima"
-  )
-
-  return (
-    `Halo Bapak/Ibu ${contactName},\n\n` +
-    `Pembayaran untuk siswa ${studentName}:\n\n` +
-    `${enrollment}\n\n` +
-    `${details}\n\n` +
-    `Terima kasih 🙏`
-  )
-}
-
 // ── Service ────────────────────────────────────────────────────────────────
 
 export const messagingService = {
@@ -228,27 +140,14 @@ export const messagingService = {
     const languageCode = process.env.META_TEMPLATE_REMINDER_LANGUAGE ?? "id"
 
     if (templateName && provider.sendTemplate) {
-      const normalized = normalizeLineItems(lineItems)
-      const subjects = subjectLabelsFromLineItems(normalized)
-      const subjectsText = subjects.length > 0 ? subjects.join(", ") : "—"
       // Named template body params (Meta parameter_format: named)
-      const components: TemplateComponent[] = [
-        {
-          type: "body",
-          parameters: [
-            { type: "text", parameter_name: "nama_orang_tua", text: contact.full_name },
-            { type: "text", parameter_name: "nama_siswa", text: context.studentName },
-            {
-              type: "text",
-              parameter_name: "bulan_tagihan",
-              text: `${getMonthName(invoice.month)} ${invoice.year}`,
-            },
-            { type: "text", parameter_name: "total_tagihan", text: formatRupiah(invoice.amount) },
-            { type: "text", parameter_name: "link_pembayaran", text: paymentUrl },
-            { type: "text", parameter_name: "mata_pelajaran", text: subjectsText },
-          ],
-        },
-      ]
+      const components = buildReminderTemplateComponents({
+        contactName: contact.full_name,
+        studentName: context.studentName,
+        invoice,
+        paymentUrl,
+        lineItems,
+      })
       return provider.sendTemplate(contact.whatsapp_number, templateName, languageCode, components)
     }
 
@@ -274,26 +173,13 @@ export const messagingService = {
     const languageCode = process.env.META_TEMPLATE_CONFIRMATION_LANGUAGE ?? "id"
 
     if (templateName && provider.sendTemplate) {
-      const normalized = normalizeLineItems(lineItems)
-      const subjects = subjectLabelsFromLineItems(normalized)
-      const subjectsText = subjects.length > 0 ? subjects.join(", ") : "—"
       // Named template body params (Meta parameter_format: named)
-      const components: TemplateComponent[] = [
-        {
-          type: "body",
-          parameters: [
-            { type: "text", parameter_name: "nama_orang_tua", text: contact.full_name },
-            { type: "text", parameter_name: "nama_siswa", text: context.studentName },
-            {
-              type: "text",
-              parameter_name: "bulan_tagihan",
-              text: `${getMonthName(invoice.month)} ${invoice.year}`,
-            },
-            { type: "text", parameter_name: "total_tagihan", text: formatRupiah(invoice.amount) },
-            { type: "text", parameter_name: "mata_pelajaran", text: subjectsText },
-          ],
-        },
-      ]
+      const components = buildConfirmationTemplateComponents({
+        contactName: contact.full_name,
+        studentName: context.studentName,
+        invoice,
+        lineItems,
+      })
       return provider.sendTemplate(contact.whatsapp_number, templateName, languageCode, components)
     }
 

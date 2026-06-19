@@ -6,6 +6,7 @@ import {
   getCurrentLeaveStreakPeriod,
   needsLeaveReview,
   parseMaxLeaveMonthsConfig,
+  buildLeaveReviewAlert,
   DEFAULT_MAX_CONSECUTIVE_LEAVE_MONTHS,
   type LeaveMonth,
 } from "@/lib/billing/leaves"
@@ -121,5 +122,58 @@ describe("parseMaxLeaveMonthsConfig", () => {
     expect(parseMaxLeaveMonthsConfig({})).toBe(DEFAULT_MAX_CONSECUTIVE_LEAVE_MONTHS)
     expect(parseMaxLeaveMonthsConfig({ months: 0 })).toBe(DEFAULT_MAX_CONSECUTIVE_LEAVE_MONTHS)
     expect(parseMaxLeaveMonthsConfig({ months: "x" })).toBe(DEFAULT_MAX_CONSECUTIVE_LEAVE_MONTHS)
+  })
+})
+
+describe("buildLeaveReviewAlert", () => {
+  const m = (month: number, year: number): LeaveMonth => ({ month, year })
+
+  it("returns null when the limit is non-positive (review disabled)", () => {
+    expect(buildLeaveReviewAlert([m(1, 2026), m(2, 2026)], 0)).toBeNull()
+    expect(buildLeaveReviewAlert([m(1, 2026), m(2, 2026)], -1)).toBeNull()
+  })
+
+  it("returns null when the current streak is below the limit", () => {
+    expect(buildLeaveReviewAlert([m(1, 2026), m(2, 2026)], 3)).toBeNull()
+  })
+
+  it("returns null when there are no leaves", () => {
+    expect(buildLeaveReviewAlert([], 1)).toBeNull()
+  })
+
+  it("flags a streak that meets the limit, with the inclusive period", () => {
+    expect(buildLeaveReviewAlert([m(1, 2026), m(2, 2026), m(3, 2026)], 3)).toEqual({
+      consecutive_months: 3,
+      max_consecutive_months: 3,
+      period_start_month: 1,
+      period_start_year: 2026,
+      period_end_month: 3,
+      period_end_year: 2026,
+    })
+  })
+
+  it("uses the streak ending at the latest month, not the longest run", () => {
+    // Earlier run Jan–Mar (3), gap, then May–Jun (2). Latest is Jun.
+    expect(
+      buildLeaveReviewAlert([m(1, 2026), m(2, 2026), m(3, 2026), m(5, 2026), m(6, 2026)], 2)
+    ).toEqual({
+      consecutive_months: 2,
+      max_consecutive_months: 2,
+      period_start_month: 5,
+      period_start_year: 2026,
+      period_end_month: 6,
+      period_end_year: 2026,
+    })
+  })
+
+  it("spans a year boundary (Nov–Dec–Jan)", () => {
+    expect(buildLeaveReviewAlert([m(11, 2025), m(12, 2025), m(1, 2026)], 3)).toEqual({
+      consecutive_months: 3,
+      max_consecutive_months: 3,
+      period_start_month: 11,
+      period_start_year: 2025,
+      period_end_month: 1,
+      period_end_year: 2026,
+    })
   })
 })
