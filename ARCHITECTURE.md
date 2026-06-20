@@ -40,7 +40,7 @@ Browser ──▶ proxy.ts (middleware: session refresh + login redirect)
 
 Domain modules: `features/students/`, `features/payments/`, `features/messaging/`, `features/reports/` (read-only) — each with `service.ts`, `types.ts`, and (where they exist) `actions.ts`, `validations.ts`, `components/`.
 
-**Reports** follow the same read path as the dashboard: `app/(dashboard)/reports` server component / `app/api/reports/*` route → `features/reports/service.ts` (cookie-session client) → pure `lib/reports/` aggregations. No writes, no migration.
+**Reports** follow the same read path as the dashboard: `app/(dashboard)/reports` server component / `app/api/reports/*` route → `features/reports/service.ts` (cookie-session client) → pure `lib/reports/` aggregations. No writes, no migration. Exception to the response-envelope convention: `GET /api/reports/export` returns a raw `text/csv` attachment (not `{data, error}`) so the browser downloads it directly.
 
 ## Two Supabase clients
 
