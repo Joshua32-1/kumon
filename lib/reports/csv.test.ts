@@ -21,6 +21,13 @@ describe("toCsv", () => {
   it("emits just the header row for no data", () => {
     expect(toCsv(["a", "b"], [])).toBe("a,b")
   })
+
+  it("neutralizes spreadsheet formula injection with a leading apostrophe", () => {
+    expect(toCsv(["name"], [["=SUM(A1)"]])).toBe("name\r\n'=SUM(A1)")
+    expect(toCsv(["name"], [["@cmd"]])).toBe("name\r\n'@cmd")
+    // a formula that also needs quoting (contains a comma) gets both treatments
+    expect(toCsv(["name"], [["=cmd,x"]])).toBe('name\r\n"\'=cmd,x"')
+  })
 })
 
 describe("buildPaymentLedgerRows", () => {

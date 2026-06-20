@@ -53,11 +53,11 @@ export default async function ReportsPage() {
           </h2>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <KpiCard
-              title="Total Siswa Aktif"
+              title="Total Siswa"
               value={subjectMix.totalStudents}
-              description={subjectMix.byLevel
+              description={`Aktif + cuti · ${subjectMix.byLevel
                 .map((l) => `${l.label}: ${l.count}`)
-                .join(" · ")}
+                .join(" · ")}`}
             />
             {subjectMix.bySubject.map((s) => (
               <KpiCard

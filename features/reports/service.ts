@@ -107,10 +107,10 @@ export const reportsService = {
         amount: inv.amount,
         paid_at: inv.paid_at,
       }))
-      .sort((a, b) =>
-        a.month !== b.month
-          ? a.month - b.month
-          : a.student_name.localeCompare(b.student_name)
-      )
+      .sort((a, b) => {
+        if (a.year !== b.year) return a.year - b.year
+        if (a.month !== b.month) return a.month - b.month
+        return a.student_name.localeCompare(b.student_name)
+      })
   },
 }
