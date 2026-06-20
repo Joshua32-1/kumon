@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Users,
   CreditCard,
+  BarChart3,
   Settings,
   Menu,
   X,
@@ -19,6 +20,7 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/students", label: "Siswa", icon: Users },
   { href: "/payments", label: "Pembayaran", icon: CreditCard },
+  { href: "/reports", label: "Laporan", icon: BarChart3 },
   { href: "/settings", label: "Pengaturan", icon: Settings },
 ]
 

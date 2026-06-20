@@ -20,7 +20,10 @@ export interface ArrearsSummary {
  * - status is OVERDUE (cron has already marked it), or
  * - status is PENDING but due_date has passed (edge case before cron runs)
  */
-export function isArrearsInvoice(inv: Invoice, today: string): boolean {
+export function isArrearsInvoice(
+  inv: Pick<Invoice, "status" | "due_date">,
+  today: string
+): boolean {
   if (inv.status === "OVERDUE") return true
   if (inv.status === "PENDING" && inv.due_date < today) return true
   return false
