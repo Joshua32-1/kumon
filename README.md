@@ -72,7 +72,7 @@ Open [http://localhost:3000](http://localhost:3000) and log in with the admin us
 
 ### 4. Tests
 
-Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
+Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, reporting aggregations incl. collection rate & arrears aging, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
 
 ```bash
 npm test            # run once
@@ -140,6 +140,14 @@ Long-running cron routes set `maxDuration` (requires **Vercel Pro** — Hobby ca
 **Vercel Hobby** cannot run reminder or invoice-generation workloads at scale — functions time out after ~10s. Use **Vercel Pro** (for `maxDuration` up to 300s) or an **external cron** (e.g. GitHub Actions, cron-job.org) that calls the same GET endpoints with `Authorization: Bearer {CRON_SECRET}`.
 
 Every slot runs Phase 1: for each invoice with a due (`scheduled_date <= today`) unsent reminder it sends only the **latest** due reminder and cancels the earlier due rows ("Digantikan pengingat terbaru"), so a reminder stranded in the past (mid-month enrollment, cuti rebill) is sent once and never duplicated or sent out of order; a same-day `FAILED` row is retried by the next slot. Slot 10 additionally sends the overdue/prior-month chase (Phase 2). Deduplication is automatic — already-SENT rows are skipped by subsequent slots.
+
+### Reports & insights (`/reports`)
+
+The **Laporan** page surfaces read-only analytics over existing data (no schema changes):
+- **Tingkat Penagihan (collection rate)** — `paid ÷ billed` per month (billed excludes CANCELLED/WAIVED; PAID_OLD_LINK counts as paid), with a period selector mirroring the revenue chart.
+- **Umur Tunggakan (arrears aging)** — outstanding invoices bucketed by days past due (0–30 / 31–60 / 61–90 / 90+) with counts and Rp totals.
+
+Aggregation logic is pure and unit-tested in `lib/reports/`; the page/API read via the cookie-session Supabase client (`features/reports/service.ts`). See [API.md](API.md) for the `/api/reports/*` endpoints.
 
 ### Attention and arrears tracking
 

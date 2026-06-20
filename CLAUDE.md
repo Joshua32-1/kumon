@@ -35,6 +35,7 @@ Domain → skill map (in addition to the table above):
 - **WhatsApp / Meta templates** (`features/messaging/`, `META_*` vars) → `code-review-checklist` + `feature-testing`; add `production-readiness` for template/env changes
 - **Database / migrations** → `supabase-migrations` + `code-review-checklist`
 - **Dates / timezone** (`lib/utils.ts`, `lib/billing/`) → `code-review-checklist` (WIB section) + `feature-testing` (date boundaries)
+- **Reports / analytics** (`lib/reports/`, `features/reports/`, `app/(dashboard)/reports`, `app/api/reports/*`) → `code-review-checklist` + `feature-testing`
 
 ### Mandatory completion workflow
 
@@ -59,7 +60,7 @@ npm run test:watch # Vitest watch mode
 npm run test:coverage # tests + coverage report (text + HTML in coverage/)
 ```
 
-Unit tests run with Vitest, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, cron auth) and `features/` (billing summary, validations); tests live next to their source as `*.test.ts`, with shared fixtures in `lib/test/factories.ts`. There is no linter — `tsc`/`build` remain the type gate, and CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `tsc --noEmit` and `npm test`, then prints a non-blocking coverage summary (coverage does not gate merges). Regenerate DB types after schema changes:
+Unit tests run with Vitest, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, reporting aggregations incl. collection rate & arrears aging, cron auth) and `features/` (billing summary, validations); tests live next to their source as `*.test.ts`, with shared fixtures in `lib/test/factories.ts`. There is no linter — `tsc`/`build` remain the type gate, and CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `tsc --noEmit` and `npm test`, then prints a non-blocking coverage summary (coverage does not gate merges). Regenerate DB types after schema changes:
 
 ```bash
 npx supabase gen types typescript --project-id <project-id> > types/database.ts
@@ -69,7 +70,7 @@ npx supabase gen types typescript --project-id <project-id> > types/database.ts
 
 - `app/(dashboard)/…`, `app/(auth)/login` — pages; `app/api/…` — route handlers. No business logic here.
 - `features/{students,payments,messaging}/` — domain modules: `actions.ts` (server actions: zod-validate via `validations.ts`, call service, `revalidatePath`), `service.ts` (all business logic and DB access), `types.ts`, `components/`.
-- `lib/` — infrastructure (Supabase/Midtrans clients, cron auth/toggles) and pure helpers: billing logic in `lib/billing/` (incl. invoice-generation eligibility and reminder selection), payment decision logic in `lib/payments/` (Midtrans settlement, pay-page access, pay links), and Midtrans expiry/retry predicates in `lib/midtrans/`. The service delegates these pure decisions to `lib/` and keeps DB/network orchestration.
+- `lib/` — infrastructure (Supabase/Midtrans clients, cron auth/toggles) and pure helpers: billing logic in `lib/billing/` (incl. invoice-generation eligibility and reminder selection), payment decision logic in `lib/payments/` (Midtrans settlement, pay-page access, pay links), Midtrans expiry/retry predicates in `lib/midtrans/`, and read-only reporting aggregations in `lib/reports/` (collection rate, arrears aging). The service delegates these pure decisions to `lib/` and keeps DB/network orchestration.
 
 [features/payments/service.ts](features/payments/service.ts) is the core of the system — most behavior changes land there. Pure decision logic should live in `lib/` (and be unit-tested) rather than inline in the service.
 

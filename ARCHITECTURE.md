@@ -35,8 +35,12 @@ Browser ──▶ proxy.ts (middleware: session refresh + login redirect)
 | Services | `features/*/service.ts` | All business logic and DB access. [features/payments/service.ts](features/payments/service.ts) is the core of the system — invoice generation, reminders, reconciliation, status transitions. |
 | Infrastructure | `lib/` | Supabase clients, Midtrans client, cron auth/toggles, error types. |
 | Pure billing helpers | `lib/billing/` | Fees, historical fee schedule, grades, billing periods, leaves, arrears, revenue chart. No side effects — safe to call anywhere. |
+| Pure payment/Midtrans helpers | `lib/payments/`, `lib/midtrans/` | Settlement decision, pay-page access gating, pay links; Midtrans expiry/retry predicates. |
+| Pure reporting helpers | `lib/reports/` | Read-only analytics aggregations (collection rate, arrears aging). No side effects. |
 
-Domain modules: `features/students/`, `features/payments/`, `features/messaging/` — each with `actions.ts`, `service.ts`, `types.ts`, `validations.ts` (where input exists), and `components/`.
+Domain modules: `features/students/`, `features/payments/`, `features/messaging/`, `features/reports/` (read-only) — each with `service.ts`, `types.ts`, and (where they exist) `actions.ts`, `validations.ts`, `components/`.
+
+**Reports** follow the same read path as the dashboard: `app/(dashboard)/reports` server component / `app/api/reports/*` route → `features/reports/service.ts` (cookie-session client) → pure `lib/reports/` aggregations. No writes, no migration.
 
 ## Two Supabase clients
 

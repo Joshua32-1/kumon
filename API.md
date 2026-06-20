@@ -49,6 +49,22 @@ Unauthenticated requests are redirected to `/login` by [proxy.ts](proxy.ts).
 | `PATCH /api/settings` | Upsert config rows | Body: `{updates: [{key, value}]}`. Saving `subject_fees` also appends to the historical `subject_fees_schedule` |
 | `GET /api/dashboard/revenue` | Paid-invoice revenue chart summary | Query: `period` (validated by `isRevenueChartPeriod`, default `1_year`) |
 
+### Reports (`/api/reports/*`)
+
+Session-guarded, read-only. Aggregation is pure (`lib/reports/`); routes read via `features/reports/service.ts` (cookie-session client) and return the `{data, error}` envelope.
+
+| Method & path | Purpose | Input |
+|---|---|---|
+| `GET /api/reports/collection-rate` | Collection rate per month (`paid ÷ billed`; billed excludes CANCELLED/WAIVED, PAID_OLD_LINK counts as paid). Returns `{period, billed, paid, rate, points[]}` (`rate` is `null` when billed is 0). | Query: `period` (validated by `isRevenueChartPeriod`, default `1_year`) |
+| `GET /api/reports/arrears-aging` | Outstanding PENDING/OVERDUE invoices bucketed by WIB days past due (0–30 / 31–60 / 61–90 / 90+). Returns `{buckets[], count, totalAmount}`. | — |
+
+```bash
+# Collection rate for the last year (send your dashboard session cookie)
+curl -s "$APP_URL/api/reports/collection-rate?period=1_year" -H "Cookie: $SESSION"
+# Arrears aging snapshot
+curl -s "$APP_URL/api/reports/arrears-aging" -H "Cookie: $SESSION"
+```
+
 ## Public routes
 
 ### `GET /pay/{token}` — parent payment page
