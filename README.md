@@ -72,7 +72,7 @@ Open [http://localhost:3000](http://localhost:3000) and log in with the admin us
 
 ### 4. Tests
 
-Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, reporting aggregations incl. collection rate & arrears aging, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
+Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, reporting aggregations incl. collection rate, arrears aging, enrollment/churn, subject mix & CSV export, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
 
 ```bash
 npm test            # run once
@@ -146,8 +146,11 @@ Every slot runs Phase 1: for each invoice with a due (`scheduled_date <= today`)
 The **Laporan** page surfaces read-only analytics over existing data (no schema changes):
 - **Tingkat Penagihan (collection rate)** — `paid ÷ billed` per month (billed excludes CANCELLED/WAIVED; PAID_OLD_LINK counts as paid), with a period selector mirroring the revenue chart.
 - **Umur Tunggakan (arrears aging)** — outstanding invoices bucketed by days past due (0–30 / 31–60 / 61–90 / 90+) with counts and Rp totals.
+- **Pendaftaran vs. Nonaktif (enrollment vs. churn)** — new vs. deactivated students per month with net change (`deactivated_at` bucketed by WIB month).
+- **Komposisi Mata Pelajaran (subject & level mix)** — active-student counts per subject and school level.
+- **Buku Pembayaran (payment ledger + CSV export)** — a year-scoped invoice ledger with a CSV download for bookkeeping; distinct from the month-scoped operational view on the Pembayaran page.
 
-Aggregation logic is pure and unit-tested in `lib/reports/`; the page/API read via the cookie-session Supabase client (`features/reports/service.ts`). See [API.md](API.md) for the `/api/reports/*` endpoints.
+Aggregation logic is pure and unit-tested in `lib/reports/`; the page/API read via the cookie-session Supabase client (`features/reports/service.ts`). The CSV export route returns raw `text/csv` (not the `{data, error}` envelope). See [API.md](API.md) for the `/api/reports/*` endpoints.
 
 ### Attention and arrears tracking
 

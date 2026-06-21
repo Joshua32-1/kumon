@@ -57,12 +57,20 @@ Session-guarded, read-only. Aggregation is pure (`lib/reports/`); routes read vi
 |---|---|---|
 | `GET /api/reports/collection-rate` | Collection rate per month (`paid ÷ billed`; billed excludes CANCELLED/WAIVED, PAID_OLD_LINK counts as paid). Returns `{period, billed, paid, rate, points[]}` (`rate` is `null` when billed is 0). | Query: `period` (validated by `isRevenueChartPeriod`, default `1_year`) |
 | `GET /api/reports/arrears-aging` | Outstanding PENDING/OVERDUE invoices bucketed by WIB days past due (0–30 / 31–60 / 61–90 / 90+). Returns `{buckets[], count, totalAmount}`. | — |
+| `GET /api/reports/enrollment` | New vs. deactivated students per month (`deactivated_at` bucketed by **WIB** month). Returns `{period, joined, churned, net, points[]}`. | Query: `period` (validated by `isRevenueChartPeriod`, default `1_year`) |
+| `GET /api/reports/payment-ledger` | Year-scoped invoice ledger (month, year, student, status, amount, paid_at), sorted by month then student. Returns a `PaymentLedgerRow[]`. | Query: `year` (default current WIB year), optional `status` (a `payment_status`) |
+| `GET /api/reports/export` | Same data as the ledger, returned as a **raw `text/csv`** download (RFC-4180 escaped) — `Content-Disposition: attachment; filename="pembayaran-<year>[-<status>].csv"`. Not the `{data,error}` envelope. | Query: `year`, optional `status` |
 
 ```bash
 # Collection rate for the last year (send your dashboard session cookie)
 curl -s "$APP_URL/api/reports/collection-rate?period=1_year" -H "Cookie: $SESSION"
 # Arrears aging snapshot
 curl -s "$APP_URL/api/reports/arrears-aging" -H "Cookie: $SESSION"
+# Enrollment vs. churn
+curl -s "$APP_URL/api/reports/enrollment?period=1_year" -H "Cookie: $SESSION"
+# Payment ledger (JSON) and CSV export for 2026
+curl -s "$APP_URL/api/reports/payment-ledger?year=2026&status=PAID" -H "Cookie: $SESSION"
+curl -s "$APP_URL/api/reports/export?year=2026" -H "Cookie: $SESSION" -o pembayaran-2026.csv
 ```
 
 ## Public routes
