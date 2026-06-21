@@ -4,8 +4,9 @@ import { useState } from "react"
 import useSWR from "swr"
 import {
   Bar,
-  BarChart,
   CartesianGrid,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -49,6 +50,7 @@ function ChartTooltip({
       <p className="text-muted-foreground">Daftar baru: {p.joined}</p>
       <p className="text-muted-foreground">Nonaktif: {p.churned}</p>
       <p className="text-muted-foreground">Netto: {p.net >= 0 ? `+${p.net}` : p.net}</p>
+      <p className="text-muted-foreground">Aktif: {p.activeAtEnd}</p>
     </div>
   )
 }
@@ -67,8 +69,8 @@ export function EnrollmentChurnChart() {
       <CardHeader className="border-b">
         <CardTitle>Pendaftaran vs. Nonaktif</CardTitle>
         <CardDescription>
-          Siswa baru dan nonaktif per bulan
-          {data ? ` · Netto ${data.net >= 0 ? `+${data.net}` : data.net}` : ""}
+          Siswa baru, nonaktif, dan total aktif per bulan
+          {data ? ` · ${data.currentActive} aktif` : ""}
         </CardDescription>
         <CardAction>
           <div className="flex flex-wrap justify-end gap-2">
@@ -99,7 +101,7 @@ export function EnrollmentChurnChart() {
         ) : (
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <ComposedChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                 <XAxis
                   dataKey="label"
@@ -109,6 +111,16 @@ export function EnrollmentChurnChart() {
                   interval={points.length > 18 ? Math.floor(points.length / 12) : 0}
                 />
                 <YAxis
+                  yAxisId="left"
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
+                  allowDecimals={false}
+                  width={32}
+                />
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
                   tickLine={false}
                   axisLine={false}
                   tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
@@ -119,9 +131,17 @@ export function EnrollmentChurnChart() {
                   cursor={{ fill: "var(--muted)", opacity: 0.35 }}
                   content={<ChartTooltip />}
                 />
-                <Bar dataKey="joined" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                <Bar dataKey="churned" fill="var(--danger)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-              </BarChart>
+                <Bar yAxisId="left" dataKey="joined" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar yAxisId="left" dataKey="churned" fill="var(--danger)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="activeAtEnd"
+                  stroke="var(--chart-2, var(--foreground))"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         )}

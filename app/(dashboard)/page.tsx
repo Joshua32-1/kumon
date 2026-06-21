@@ -2,6 +2,7 @@ import Link from "next/link"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { studentService } from "@/features/students/service"
 import { paymentService } from "@/features/payments/service"
+import { reportsService } from "@/features/reports/service"
 import { PageHeader } from "@/components/shared/PageHeader"
 import { KpiCard } from "@/components/shared/KpiCard"
 import { AlertPanel } from "@/components/shared/AlertPanel"
@@ -88,11 +89,15 @@ async function getDashboardStats() {
 }
 
 export default async function DashboardPage() {
-  const [stats, leaveReview, paidLeaveConflicts] = await Promise.all([
+  const [stats, leaveReview, paidLeaveConflicts, collection] = await Promise.all([
     getDashboardStats(),
     studentService.listLeaveReviewAlerts(),
     paymentService.listPaidLeaveConflicts(),
+    reportsService.collectionRate("this_month"),
   ])
+
+  const collectionRateLabel =
+    collection.rate == null ? "—" : `${Math.round(collection.rate * 100)}%`
 
   const operationalCards = [
     {
@@ -115,6 +120,13 @@ export default async function DashboardPage() {
       description: "Total pembayaran lunas bulan ini",
       highlight: false,
       href: null,
+    },
+    {
+      title: "Tingkat Penagihan",
+      value: collectionRateLabel,
+      description: `Tagihan ${stats.currentMonth} yang sudah lunas`,
+      highlight: false,
+      href: "/reports",
     },
     {
       title: "Siswa Cuti",
