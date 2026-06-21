@@ -4,6 +4,9 @@ import {
   feesEqual,
   resolveFeesForPeriod,
   appendFeeScheduleEntry,
+  findEffectiveFeeScheduleEntry,
+  feeScheduleEntryForCurrentMonth,
+  buildInitialFeeSchedule,
   type FeeScheduleEntry,
 } from "@/lib/billing/fee-schedule"
 import { DEFAULT_SUBJECT_FEES, type SubjectFeeConfig } from "@/lib/billing/fees"
@@ -88,5 +91,74 @@ describe("appendFeeScheduleEntry", () => {
     const start: FeeScheduleEntry[] = [{ year: 2025, month: 1, fees: feeConfig(400_000) }]
     const next = appendFeeScheduleEntry(start, 6, 2026, feeConfig(600_000))
     expect(next.map((e) => `${e.year}-${e.month}`)).toEqual(["2025-1", "2026-6"])
+  })
+})
+
+describe("findEffectiveFeeScheduleEntry", () => {
+  const schedule: FeeScheduleEntry[] = [
+    { year: 2025, month: 1, fees: feeConfig(400_000) },
+    { year: 2026, month: 1, fees: feeConfig(500_000) },
+    { year: 2026, month: 6, fees: feeConfig(600_000) },
+  ]
+
+  it("returns the entry effective on or before the period, not a later one", () => {
+    expect(findEffectiveFeeScheduleEntry(schedule, 3, 2026)).toMatchObject({
+      year: 2026,
+      month: 1,
+    })
+  })
+
+  it("returns the entry matching exactly on its effective period", () => {
+    expect(findEffectiveFeeScheduleEntry(schedule, 6, 2026)).toMatchObject({
+      year: 2026,
+      month: 6,
+    })
+  })
+
+  it("returns null when the period precedes every entry", () => {
+    // Resolved fees fall back to DEFAULT_SUBJECT_FEES, which no entry equals.
+    expect(findEffectiveFeeScheduleEntry(schedule, 12, 2024)).toBeNull()
+  })
+
+  it("returns the latest matching entry when consecutive entries share fees", () => {
+    // Two adjacent entries carry identical fees; the idx >= bestIndex tie-break
+    // surfaces the later one as the effective entry.
+    const dup: FeeScheduleEntry[] = [
+      { year: 2025, month: 1, fees: feeConfig(500_000) },
+      { year: 2026, month: 1, fees: feeConfig(500_000) },
+    ]
+    expect(findEffectiveFeeScheduleEntry(dup, 6, 2026)).toMatchObject({
+      year: 2026,
+      month: 1,
+    })
+  })
+})
+
+describe("feeScheduleEntryForCurrentMonth", () => {
+  it("stamps the entry with the Jakarta (WIB) month/year across a UTC boundary", () => {
+    // 23:30 UTC on Jan 31 is already Feb 1 in Jakarta (+7h).
+    const entry = feeScheduleEntryForCurrentMonth(
+      feeConfig(550_000),
+      new Date("2026-01-31T23:30:00Z")
+    )
+    expect(entry).toMatchObject({ month: 2, year: 2026 })
+  })
+
+  it("normalizes the supplied fees into a well-formed config", () => {
+    const entry = feeScheduleEntryForCurrentMonth(
+      feeConfig(550_000),
+      new Date("2026-06-15T05:00:00Z")
+    )
+    expect(entry.fees.elementary.english).toBe(550_000)
+    expect(entry.fees.secondary).toEqual(DEFAULT_SUBJECT_FEES.secondary)
+  })
+})
+
+describe("buildInitialFeeSchedule", () => {
+  it("anchors a single entry at 2020-01 with the normalized fees", () => {
+    const schedule = buildInitialFeeSchedule(feeConfig(480_000))
+    expect(schedule).toHaveLength(1)
+    expect(schedule[0]).toMatchObject({ year: 2020, month: 1 })
+    expect(schedule[0].fees.elementary.english).toBe(480_000)
   })
 })
