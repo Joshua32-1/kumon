@@ -100,18 +100,18 @@ export default function PaymentsPage() {
 
   const invoices = attentionOnly
     ? baseInvoices.filter((inv) => {
-        const s = getBillingSummary(inv, inv.payment_reminders ?? [], today)
+        const s = getBillingSummary(inv, inv.payment_reminders ?? [], today, inv.message_events ?? [])
         return s.attention === "needs_action"
       })
     : baseInvoices
 
   const deliveryCount = allInvoices.filter((inv) => {
-    const s = getBillingSummary(inv, inv.payment_reminders ?? [], today)
+    const s = getBillingSummary(inv, inv.payment_reminders ?? [], today, inv.message_events ?? [])
     return s.attentionReason === "delivery"
   }).length
 
   const collectionCount = allInvoices.filter((inv) => {
-    const s = getBillingSummary(inv, inv.payment_reminders ?? [], today)
+    const s = getBillingSummary(inv, inv.payment_reminders ?? [], today, inv.message_events ?? [])
     return s.attentionReason === "collection"
   }).length
 

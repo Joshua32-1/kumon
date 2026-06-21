@@ -88,23 +88,34 @@ This is the **only** place Snap sessions are created for parents — never at ge
 
 Verifies the SHA-512 `signature_key` before anything else (401 `WEBHOOK_INVALID` on mismatch). Then `paymentService.handleMidtransWebhook` maps the transaction status onto the invoice (settlement → `PAID`; stale order → `PAID_OLD_LINK`) and sends the confirmation WhatsApp when appropriate (failure to send is logged, not fatal). Returns `{received: true, …}`.
 
+### `GET|POST /api/webhooks/meta` — WhatsApp delivery status
+
+Meta WhatsApp Cloud API webhook for message **delivery** callbacks (the send-API result is captured separately at send time in `message_events`).
+- **GET** — Meta subscription handshake: echoes `hub.challenge` (plain text, 200) when `hub.mode=subscribe` and `hub.verify_token === META_VERIFY_TOKEN`; otherwise 403.
+- **POST** — verifies `X-Hub-Signature-256` (HMAC-SHA256 of the raw body with `META_APP_SECRET`; 401 `WEBHOOK_INVALID` on mismatch), then advances each `message_events` row keyed by `wamid` to `DELIVERED`/`READ`/`FAILED`. Forward-progress only (out-of-order callbacks never downgrade); unknown `wamid` is ignored. Returns `{received: true, events, updated}`.
+
+In the Meta dashboard, set the callback URL to `{NEXT_PUBLIC_APP_URL}/api/webhooks/meta`, the verify token to `META_VERIFY_TOKEN`, and subscribe to the `messages` field.
+
 ## Cron routes (`/api/cron/*`)
 
-**Auth** (all seven, both methods): `Authorization: Bearer {CRON_SECRET}` (Vercel Cron uses GET) or `x-api-key: {WEBHOOK_SECRET}` (manual, typically POST + JSON overrides). Each route then checks its toggle in `system_config.cron_jobs` and returns `{skipped: true, reason: "cron_disabled"}` when off. All accept GET and POST; POST bodies are optional and zod-validated (an invalid body silently falls back to defaults). All are idempotent.
+**Auth** (all eight, both methods): `Authorization: Bearer {CRON_SECRET}` (Vercel Cron uses GET) or `x-api-key: {WEBHOOK_SECRET}` (manual, typically POST + JSON overrides). Each route then checks its toggle in `system_config.cron_jobs` and returns `{skipped: true, reason: "cron_disabled"}` when off. All accept GET and POST; POST bodies are optional and zod-validated (an invalid body silently falls back to defaults). All are idempotent.
 
 | Route | vercel.json (UTC → WIB) | `maxDuration` | POST body overrides | Result fields |
 |---|---|---|---|---|
-| `generate-invoices` | `0 0 1 * *` → 1st 07:00 | 120 | `month` 1–12, `year` ≥2020 (default: current WIB month) | `generated`, … (201 if `generated > 0`) |
+| `generate-invoices` | `0 0 1 * *`, `0 1 1 * *`, `30 1 1 * *` → 1st 07:00 / 08:00 / 08:30 (idempotent retries, all before the 09:00 reminder slot) | 120 | `month` 1–12, `year` ≥2020 (default: current WIB month) | `generated`, … (201 if `generated > 0`) |
 | `backfill-payment-links` | `30 0 * * *` → daily 07:30 | 60 | `month`, `year`, `batch_limit` 1–200 | `created`, … (201 if `created > 0`) |
 | `send-reminders` | 10 slots: `0,30 2-6 1,11,21 * *` → 09:00–13:30 on the 1st/11th/21st | 300 | `date` `YYYY-MM-DD`, `slot` 1–10 (default: slot inferred from WIB clock; non-reminder days behave as slot 10) | sent/failed counts per phase |
 | `reconcile-payments` | `0 15 * * *` → daily 22:00 | — | none (fixed `minAgeHours: 6`) | reconciliation summary |
 | `promote-grades` | `0 17 30 6 *` → Jul 1 07:00 | — | `force` bool, `promotionYear` ≥2020 (**required with `force` outside July**) | `promoted`/`unchanged`/`already_promoted` |
 | `sync-leave-status` | `15 17 * * *` → daily 00:15 | — | none | `month`, `year`, `marked_on_leave`, `reactivated` |
 | `mark-overdue` | `30 17 * * *` → daily 00:30 | 60 | `today` `YYYY-MM-DD` (default: WIB today; for testing the boundary) | `marked` |
+| `billing-watchdog` | `0 3 * * *` → daily 10:00 | 60 | none (uses current WIB month) | `healthy`, `missing`, `missing_count`, `alert_sent` |
 
 Slot semantics: every slot runs Phase 1 — for each invoice with a due (`scheduled_date <= today`) unsent reminder, send only its latest due reminder and cancel earlier due rows ("Digantikan pengingat terbaru"); slot 10 additionally chases overdue/prior months (Phase 2). Constants in [lib/constants.ts](lib/constants.ts).
 
 `mark-overdue` flips every `PENDING` invoice whose `due_date < today` (WIB) to `OVERDUE`. This is the calendar-driven source of the persisted `OVERDUE` ("Terlambat") status — independent of invoice generation. Invoice generation runs the same date-based sweep (its `marked_overdue` count), so the two never disagree.
+
+`billing-watchdog` is read-only: it asserts that every billable student who should have an active invoice this WIB month actually has one (mirroring `generateMonthlyAutomated`'s eligibility), and emails the admin (Resend, `ALERT_EMAIL_TO`) only when `missing` is non-empty. It is the daily backstop for the single-shot `generate-invoices` cron. Separately, the `generate-invoices` and `promote-grades` routes email the admin on a genuine failure (5xx / unexpected throw — not benign 4xx control flow) since neither has a code-level retry.
 
 `sync-leave-status` enforces the status invariant *status = `TEMPORARY_LEAVE` iff the student has a `temporary_leaves` row for the current WIB month* — it marks `ACTIVE` students with a current-month leave as `TEMPORARY_LEAVE` and reverts `TEMPORARY_LEAVE` students without one to `ACTIVE`. `INACTIVE` students are never touched. Billing never reads the status field (it reads `temporary_leaves` rows), so this is display/KPI hygiene only.
 
@@ -138,4 +149,7 @@ curl http://localhost:3000/api/cron/sync-leave-status \
 curl -X POST http://localhost:3000/api/cron/mark-overdue \
   -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
   -d '{"today": "2026-07-01"}'   # simulate the boundary; omit body for real WIB today
+
+curl http://localhost:3000/api/cron/billing-watchdog \
+  -H "Authorization: Bearer $CRON_SECRET"   # read-only; emails admin if invoices are missing
 ```

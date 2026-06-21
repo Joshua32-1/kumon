@@ -52,8 +52,17 @@ Fill in all values:
 | `WHATSAPP_BATCH_LIMIT` | Optional — max sends per reminder slot (default `100`) |
 | `WEBHOOK_SECRET` | Secret for manual/local cron calls (`x-api-key` header on POST) |
 | `CRON_SECRET` | **Required on Vercel** — Vercel Cron sends `Authorization: Bearer {CRON_SECRET}` on GET |
+| `RESEND_API_KEY` | Resend → API Keys. Enables admin failure-alert emails (watchdog + singleton cron failures) |
+| `ALERT_EMAIL_FROM` | Verified Resend sender for alert emails |
+| `ALERT_EMAIL_TO` | Where admin alert emails are sent |
+| `META_APP_SECRET` | Meta App → Settings → Basic. Verifies the `/api/webhooks/meta` `X-Hub-Signature-256` |
+| `META_VERIFY_TOKEN` | Any random string; must match the verify token set in the Meta webhook config |
 
 Templates must be **approved** in WhatsApp Manager for the same phone number as `META_PHONE_NUMBER_ID`, with names and language codes matching exactly — otherwise sends fail with Meta error `(#132001)`. The required template variable names are documented in `.env.local.example`.
+
+**WhatsApp delivery tracking (optional):** to record whether reminders/confirmations were delivered/read, add a webhook in the Meta app — callback URL `{NEXT_PUBLIC_APP_URL}/api/webhooks/meta`, verify token = `META_VERIFY_TOKEN`, subscribed to the `messages` field. Without it, sends still work; the payments UI just won't show a delivery/read status.
+
+**Admin failure alerts (optional):** set the three `RESEND_API_KEY` / `ALERT_EMAIL_FROM` / `ALERT_EMAIL_TO` vars to be emailed when the daily `billing-watchdog` finds students missing this month's invoice, or when `generate-invoices` / `promote-grades` fail. If unset, alerts are silently skipped.
 
 ### Subject fees (seeded in migration)
 
@@ -189,8 +198,10 @@ Apply database migrations **before** (or at the same time as) deploying app code
 - **`0010`** adds the `paid_leave_conflict_resolutions` table backing the dashboard paid-leave panel. Without it, the dashboard 500s on the missing table. Verify: `SELECT count(*) FROM pg_policies WHERE tablename = 'paid_leave_conflict_resolutions' AND policyname = 'admin_all';` → 1.
 - **`0011`** drops the unused legacy `whatsapp_provider` config seed (messaging runs on the Meta WhatsApp Cloud API via `META_*` env vars). Harmless no-op if already absent. Verify: `SELECT count(*) FROM system_config WHERE key = 'whatsapp_provider';` → 0.
 - **`0012`** clamps `reminder_days` into the invoice month's valid range inside `create_invoice_with_lines`, so a misconfigured day (e.g. 31) can't crash invoice generation on short months. `CREATE OR REPLACE` — safe to re-run. Verify: `SELECT position('GREATEST(1, LEAST' in pg_get_functiondef('create_invoice_with_lines(jsonb,jsonb,int[])'::regprocedure)) > 0;` → `t`.
+- **`0013`** adds the `message_events` table + `message_event_type`/`message_delivery_status` enums for WhatsApp delivery tracking (used by `/api/webhooks/meta`). Verify: `SELECT to_regclass('public.message_events');` → non-null.
+- **`0014`** adds the `create_invoices_with_lines` bulk RPC used by the automated generation path so it scales to hundreds of students in one round-trip. Verify: `SELECT proname FROM pg_proc WHERE proname = 'create_invoices_with_lines';` → 1 row.
 
-1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0012`.
+1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0014`.
 2. **Verify enums** — in the Supabase SQL editor:
 
    ```sql

@@ -39,6 +39,15 @@ export interface InvoiceLineItem {
   created_at: string
 }
 
+export type MessageDeliveryStatus = "SENT" | "DELIVERED" | "READ" | "FAILED"
+
+export interface MessageEventSummary {
+  status: MessageDeliveryStatus
+  delivered_at: string | null
+  read_at: string | null
+  failed_at: string | null
+}
+
 export interface InvoiceWithStudent extends Invoice {
   students: {
     full_name: string
@@ -47,6 +56,7 @@ export interface InvoiceWithStudent extends Invoice {
   }
   invoice_line_items?: InvoiceLineItem[]
   payment_reminders?: PaymentReminder[]
+  message_events?: MessageEventSummary[]
 }
 
 export interface PaymentReminder {
