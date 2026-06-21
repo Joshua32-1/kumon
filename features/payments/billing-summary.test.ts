@@ -4,10 +4,51 @@ import {
   getBillingAttentionWithReason,
   getBillingAttention,
   getBillingSummary,
+  getDeliveryConfirmation,
 } from "@/features/payments/billing-summary"
-import { makeInvoice, makeReminder } from "@/lib/test/factories"
+import { makeInvoice, makeReminder, makeMessageEvent } from "@/lib/test/factories"
 
 const TODAY = "2026-06-18"
+
+describe("getDeliveryConfirmation", () => {
+  it("is unknown when there are no message events", () => {
+    expect(getDeliveryConfirmation([])).toBe("unknown")
+  })
+
+  it("is awaiting when a message was sent but no callback yet", () => {
+    expect(getDeliveryConfirmation([makeMessageEvent({ status: "SENT" })])).toBe("awaiting")
+  })
+
+  it("is delivered when a delivery callback landed", () => {
+    expect(
+      getDeliveryConfirmation([makeMessageEvent({ status: "DELIVERED", delivered_at: "2026-06-18T01:00:00Z" })])
+    ).toBe("delivered")
+  })
+
+  it("read beats delivered", () => {
+    expect(
+      getDeliveryConfirmation([
+        makeMessageEvent({ status: "DELIVERED", delivered_at: "2026-06-18T01:00:00Z" }),
+        makeMessageEvent({ status: "READ", read_at: "2026-06-18T02:00:00Z" }),
+      ])
+    ).toBe("read")
+  })
+
+  it("is failed when the only event failed", () => {
+    expect(
+      getDeliveryConfirmation([makeMessageEvent({ status: "FAILED", failed_at: "2026-06-18T01:00:00Z" })])
+    ).toBe("failed")
+  })
+
+  it("prefers a real delivery over a separate failed message", () => {
+    expect(
+      getDeliveryConfirmation([
+        makeMessageEvent({ status: "DELIVERED", delivered_at: "2026-06-18T01:00:00Z" }),
+        makeMessageEvent({ status: "FAILED", failed_at: "2026-06-18T02:00:00Z" }),
+      ])
+    ).toBe("delivered")
+  })
+})
 
 describe("getWhatsAppDeliveryStatus", () => {
   it("is not_applicable when there is no invoice", () => {
