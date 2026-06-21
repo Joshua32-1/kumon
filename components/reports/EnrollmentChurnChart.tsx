@@ -6,6 +6,7 @@ import {
   Bar,
   CartesianGrid,
   ComposedChart,
+  Legend,
   Line,
   ResponsiveContainer,
   Tooltip,
@@ -131,10 +132,17 @@ export function EnrollmentChurnChart() {
                   cursor={{ fill: "var(--muted)", opacity: 0.35 }}
                   content={<ChartTooltip />}
                 />
-                <Bar yAxisId="left" dataKey="joined" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                <Bar yAxisId="left" dataKey="churned" fill="var(--danger)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Legend
+                  wrapperStyle={{ fontSize: 12 }}
+                  formatter={(value) => (
+                    <span className="text-muted-foreground">{value}</span>
+                  )}
+                />
+                <Bar yAxisId="left" name="Daftar baru" dataKey="joined" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar yAxisId="left" name="Nonaktif" dataKey="churned" fill="var(--danger)" radius={[4, 4, 0, 0]} maxBarSize={28} />
                 <Line
                   yAxisId="right"
+                  name="Total aktif"
                   type="monotone"
                   dataKey="activeAtEnd"
                   stroke="var(--chart-2, var(--foreground))"
