@@ -63,3 +63,14 @@ export async function sendAdminAlert(message: AlertMessage): Promise<SendEmailRe
   }
   return sendEmail({ to, subject: message.subject, text: message.body })
 }
+
+/**
+ * Alert the admin when a cron handler fails for a genuine reason (5xx AppError or an
+ * unexpected throw). No-op for benign 4xx control flow. Single entry point so every
+ * cron catch block reports failures the same way.
+ */
+export async function alertCronFailure(job: string, err: unknown): Promise<void> {
+  if (!isAlertWorthyError(err)) return
+  const message = err instanceof AppError ? err.message : String(err)
+  await sendAdminAlert(formatCronFailureAlert({ job, error: message }))
+}

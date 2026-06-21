@@ -3,6 +3,7 @@ import { paymentService } from "@/features/payments/service"
 import { verifyMidtransSignature } from "@/lib/midtrans/client"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { alertCronFailure } from "@/lib/alerts"
 import type { MidtransWebhookPayload } from "@/features/payments/types"
 
 export async function POST(request: NextRequest) {
@@ -39,6 +40,9 @@ export async function POST(request: NextRequest) {
 
     return apiSuccess({ received: true, ...webhookResult })
   } catch (err) {
+    // Signature already verified above, so a throw here is a genuine processing
+    // failure on a real Midtrans notification — alert (5xx/unexpected only).
+    await alertCronFailure("webhook-midtrans", err)
     if (err instanceof AppError) {
       return apiError(err.code, err.message, err.statusCode)
     }

@@ -1,14 +1,19 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { paymentService } from "@/features/payments/service"
 import { AppError } from "@/lib/errors"
+import { escapeHtml } from "@/lib/utils"
 
 function payMessageHtml(title: string, body: string): string {
+  // title/body are static server strings today, but escape defensively so the
+  // template stays safe if a dynamic value is ever passed in.
+  const safeTitle = escapeHtml(title)
+  const safeBody = escapeHtml(body)
   return `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title}</title>
+  <title>${safeTitle}</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; padding: 2rem; background: #fafafa; color: #1a1a1a; }
     main { max-width: 28rem; margin: 4rem auto; padding: 1.5rem; background: #fff; border-radius: 12px; border: 1px solid #e5e5e5; }
@@ -18,8 +23,8 @@ function payMessageHtml(title: string, body: string): string {
 </head>
 <body>
   <main>
-    <h1>${title}</h1>
-    <p>${body}</p>
+    <h1>${safeTitle}</h1>
+    <p>${safeBody}</p>
   </main>
 </body>
 </html>`

@@ -5,6 +5,7 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError, todayInCenterTimezone, dayOfMonthFromDateString } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { alertCronFailure } from "@/lib/alerts"
 import {
   DEFAULT_REMINDER_DAYS,
   REMINDER_SLOT_COUNT,
@@ -90,6 +91,7 @@ async function handleSendReminders(request: NextRequest) {
 
     return apiSuccess(result)
   } catch (err) {
+    await alertCronFailure("send-reminders", err)
     if (err instanceof AppError) return apiError(err.code, err.message, err.statusCode)
     return apiError("INTERNAL_ERROR", "Internal server error", 500)
   }

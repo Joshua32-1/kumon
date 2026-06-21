@@ -5,6 +5,7 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { alertCronFailure } from "@/lib/alerts"
 
 // Assigns missing payment_access_token for unpaid invoices (no Midtrans calls)
 export const maxDuration = 60
@@ -46,6 +47,7 @@ async function handleBackfillPaymentLinks(request: NextRequest) {
 
     return apiSuccess(result, result.created > 0 ? 201 : 200)
   } catch (err) {
+    await alertCronFailure("backfill-payment-links", err)
     if (err instanceof AppError) return apiError(err.code, err.message, err.statusCode)
     return apiError("INTERNAL_ERROR", "Internal server error", 500)
   }

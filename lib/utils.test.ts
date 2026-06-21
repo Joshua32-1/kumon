@@ -8,6 +8,7 @@ import {
   monthYearFromDateString,
   isPriorBillingPeriod,
   isSameBillingPeriod,
+  escapeHtml,
 } from "@/lib/utils"
 
 // The WIB (Asia/Jakarta, UTC+7) invariant is the project's #1 hard rule. These
@@ -113,5 +114,23 @@ describe("isSameBillingPeriod", () => {
   it("is the complement of isPriorBillingPeriod for the current period", () => {
     expect(isSameBillingPeriod(6, 2026, 6, 2026)).toBe(true)
     expect(isPriorBillingPeriod(6, 2026, 6, 2026)).toBe(false)
+  })
+})
+
+describe("escapeHtml", () => {
+  it("encodes the HTML-significant characters", () => {
+    expect(escapeHtml(`<script>alert("x")</script>`)).toBe(
+      "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"
+    )
+    expect(escapeHtml("a & b")).toBe("a &amp; b")
+    expect(escapeHtml("it's")).toBe("it&#39;s")
+  })
+
+  it("escapes & first so existing entities are not double-decoded", () => {
+    expect(escapeHtml("&lt;")).toBe("&amp;lt;")
+  })
+
+  it("leaves plain text unchanged", () => {
+    expect(escapeHtml("Tagihan sudah lunas")).toBe("Tagihan sudah lunas")
   })
 })

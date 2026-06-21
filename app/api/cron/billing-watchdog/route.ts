@@ -4,7 +4,7 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
-import { sendAdminAlert, formatMissingInvoicesAlert } from "@/lib/alerts"
+import { sendAdminAlert, formatMissingInvoicesAlert, alertCronFailure } from "@/lib/alerts"
 
 // Daily invariant check (read-only): every billable student should have this month's
 // invoice. The single-shot generate-invoices cron has no backup, so this is its
@@ -38,6 +38,7 @@ async function handleBillingWatchdog(request: NextRequest) {
       alert_sent,
     })
   } catch (err) {
+    await alertCronFailure("billing-watchdog", err)
     if (err instanceof AppError) return apiError(err.code, err.message, err.statusCode)
     console.error("Billing watchdog failed:", err)
     return apiError("INTERNAL_ERROR", "Internal server error", 500)

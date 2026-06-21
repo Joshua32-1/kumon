@@ -5,6 +5,7 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { alertCronFailure } from "@/lib/alerts"
 
 export const maxDuration = 60
 
@@ -39,6 +40,7 @@ async function handleMarkOverdue(request: NextRequest) {
     const result = await paymentService.markOverdueByDueDate(today)
     return apiSuccess(result)
   } catch (err) {
+    await alertCronFailure("mark-overdue", err)
     if (err instanceof AppError) return apiError(err.code, err.message, err.statusCode)
     return apiError("INTERNAL_ERROR", "Internal server error", 500)
   }

@@ -6,7 +6,7 @@ import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { isGradePromotionMonth } from "@/lib/billing/grades"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { AppError, Errors } from "@/lib/errors"
-import { sendAdminAlert, formatCronFailureAlert, isAlertWorthyError } from "@/lib/alerts"
+import { alertCronFailure } from "@/lib/alerts"
 
 const bodySchema = z
   .object({
@@ -55,10 +55,7 @@ async function handlePromoteGrades(request: NextRequest) {
   } catch (err) {
     // Yearly singleton cron with no backup: alert on a genuine failure, but not on the
     // benign 4xx control-flow errors (outside-July window / missing promotionYear).
-    if (isAlertWorthyError(err)) {
-      const message = err instanceof AppError ? err.message : String(err)
-      await sendAdminAlert(formatCronFailureAlert({ job: "promote-grades", error: message }))
-    }
+    await alertCronFailure("promote-grades", err)
     if (err instanceof AppError) return apiError(err.code, err.message, err.statusCode)
     return apiError("INTERNAL_ERROR", "Internal server error", 500)
   }
