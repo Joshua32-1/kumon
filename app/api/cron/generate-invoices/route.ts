@@ -5,7 +5,7 @@ import { verifyCronAuth } from "@/lib/auth/cron"
 import { isCronJobEnabled } from "@/lib/cron/enabled"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
-import { sendAdminAlert, formatCronFailureAlert, isAlertWorthyError } from "@/lib/alerts"
+import { alertCronFailure } from "@/lib/alerts"
 
 // Invoice + payment token creation per billable student (no Midtrans at generation)
 export const maxDuration = 120
@@ -48,10 +48,7 @@ async function handleGenerateInvoices(request: NextRequest) {
   } catch (err) {
     // Singleton cron (runs on the 1st; only the day-1 retry schedule backs it up):
     // alert the admin on a genuine failure. The billing-watchdog is the daily backstop.
-    if (isAlertWorthyError(err)) {
-      const message = err instanceof AppError ? err.message : String(err)
-      await sendAdminAlert(formatCronFailureAlert({ job: "generate-invoices", error: message }))
-    }
+    await alertCronFailure("generate-invoices", err)
     if (err instanceof AppError) return apiError(err.code, err.message, err.statusCode)
     return apiError("INTERNAL_ERROR", "Internal server error", 500)
   }

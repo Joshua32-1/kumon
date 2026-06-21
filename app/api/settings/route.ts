@@ -4,14 +4,29 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { persistFeeScheduleOnSettingsSave } from "@/lib/billing/load-subject-fees"
 import { apiSuccess, apiError } from "@/lib/utils"
 
+// The only config keys the settings endpoint may write. Whitelisting prevents a
+// typo'd key from creating junk system_config rows or clobbering unrelated config.
+// Must include every key the Settings UI submits (see SettingsForm.handleSave) plus
+// the server-managed fee-schedule history, or a legitimate save 422s.
+export const SYSTEM_CONFIG_KEYS = [
+  "center_name",
+  "cron_jobs",
+  "reminder_days",
+  "subject_fees",
+  "subject_fees_schedule",
+  "max_leave_months",
+] as const
+
 const updateSchema = z.object({
   updates: z.array(
     z.object({
-      key: z.string(),
+      key: z.enum(SYSTEM_CONFIG_KEYS),
       value: z.record(z.string(), z.unknown()),
     })
   ),
 })
+
+export { updateSchema as settingsUpdateSchema }
 
 export async function GET() {
   try {

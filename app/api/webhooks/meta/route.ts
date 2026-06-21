@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { paymentService } from "@/features/payments/service"
 import { verifyMetaSignature, parseMetaStatusEvents } from "@/lib/messaging/delivery"
 import { apiSuccess, apiError } from "@/lib/utils"
+import { alertCronFailure } from "@/lib/alerts"
 
 // Meta WhatsApp webhook.
 // GET  — subscription handshake (echo hub.challenge when the verify token matches).
@@ -43,8 +44,15 @@ export async function POST(request: NextRequest) {
 
   const events = parseMetaStatusEvents(payload)
   let updated = 0
-  for (const event of events) {
-    if (await paymentService.applyMessageDeliveryEvent(event)) updated++
+  try {
+    for (const event of events) {
+      if (await paymentService.applyMessageDeliveryEvent(event)) updated++
+    }
+  } catch (err) {
+    // Signature already verified — a throw here is a genuine processing failure.
+    await alertCronFailure("webhook-meta", err)
+    console.error("Meta webhook handler failed:", err)
+    return apiError("INTERNAL_ERROR", "Internal server error", 500)
   }
 
   return apiSuccess({ received: true, events: events.length, updated })

@@ -46,7 +46,7 @@ Unauthenticated requests are redirected to `/login` by [proxy.ts](proxy.ts).
 | Method & path | Purpose | Input |
 |---|---|---|
 | `GET /api/settings` | All `system_config` rows | |
-| `PATCH /api/settings` | Upsert config rows | Body: `{updates: [{key, value}]}`. Saving `subject_fees` also appends to the historical `subject_fees_schedule` |
+| `PATCH /api/settings` | Upsert config rows | Body: `{updates: [{key, value}]}`. `key` is whitelisted to `center_name`, `cron_jobs`, `reminder_days`, `subject_fees`, `subject_fees_schedule`, `max_leave_months` (`SYSTEM_CONFIG_KEYS`) — any other key → 422. Saving `subject_fees` also appends to the historical `subject_fees_schedule` |
 | `GET /api/dashboard/revenue` | Paid-invoice revenue chart summary | Query: `period` (validated by `isRevenueChartPeriod`, default `1_year`) |
 
 ### Reports (`/api/reports/*`)
@@ -115,7 +115,9 @@ Slot semantics: every slot runs Phase 1 — for each invoice with a due (`schedu
 
 `mark-overdue` flips every `PENDING` invoice whose `due_date < today` (WIB) to `OVERDUE`. This is the calendar-driven source of the persisted `OVERDUE` ("Terlambat") status — independent of invoice generation. Invoice generation runs the same date-based sweep (its `marked_overdue` count), so the two never disagree.
 
-`billing-watchdog` is read-only: it asserts that every billable student who should have an active invoice this WIB month actually has one (mirroring `generateMonthlyAutomated`'s eligibility), and emails the admin (Resend, `ALERT_EMAIL_TO`) only when `missing` is non-empty. It is the daily backstop for the single-shot `generate-invoices` cron. Separately, the `generate-invoices` and `promote-grades` routes email the admin on a genuine failure (5xx / unexpected throw — not benign 4xx control flow) since neither has a code-level retry.
+`billing-watchdog` is read-only: it asserts that every billable student who should have an active invoice this WIB month actually has one (mirroring `generateMonthlyAutomated`'s eligibility), and emails the admin (Resend, `ALERT_EMAIL_TO`) only when `missing` is non-empty. It is the daily backstop for the single-shot `generate-invoices` cron.
+
+**Failure alerting:** every cron route emails the admin via `alertCronFailure` ([lib/alerts.ts](lib/alerts.ts)) when its handler fails for a genuine reason — a 5xx `AppError` or an unexpected throw — and stays silent on benign 4xx control flow (e.g. `OUTSIDE_PROMOTION_WINDOW`). The two webhook handlers (`/api/webhooks/midtrans`, `/api/webhooks/meta`) do the same for post-signature processing failures (an invalid signature is rejected without alerting — that is hostile traffic, not a system fault). All alerts require `RESEND_API_KEY` + `ALERT_EMAIL_FROM` + `ALERT_EMAIL_TO`; if any is unset the send is logged and skipped.
 
 `sync-leave-status` enforces the status invariant *status = `TEMPORARY_LEAVE` iff the student has a `temporary_leaves` row for the current WIB month* — it marks `ACTIVE` students with a current-month leave as `TEMPORARY_LEAVE` and reverts `TEMPORARY_LEAVE` students without one to `ACTIVE`. `INACTIVE` students are never touched. Billing never reads the status field (it reads `temporary_leaves` rows), so this is display/KPI hygiene only.
 

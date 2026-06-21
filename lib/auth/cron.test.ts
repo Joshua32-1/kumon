@@ -43,6 +43,12 @@ describe("verifyCronAuth", () => {
     expect(verifyCronAuth(fakeRequest({ authorization: "Bearer wrong" }))).toBe(false)
   })
 
+  it("rejects a wrong same-length x-api-key (constant-time path)", () => {
+    // "webhook-secret" is 14 chars; a 14-char wrong value exercises timingSafeEqual
+    // itself rather than the length-mismatch short-circuit, without throwing.
+    expect(verifyCronAuth(fakeRequest({ "x-api-key": "xxxxxxxxxxxxxx" }))).toBe(false)
+  })
+
   it("rejects bearer auth when CRON_SECRET is unset", () => {
     delete process.env.CRON_SECRET
     expect(verifyCronAuth(fakeRequest({ authorization: "Bearer cron-secret" }))).toBe(false)
