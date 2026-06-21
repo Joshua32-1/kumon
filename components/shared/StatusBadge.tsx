@@ -79,6 +79,10 @@ const statusConfig: Record<string, { label: string; className: string }> = {
     className: "bg-[var(--warning-muted)] text-[var(--warning-foreground)] border-[var(--warning-border)]",
   },
   // WhatsApp delivery confirmation (Meta callbacks)
+  awaiting: {
+    label: "Menunggu konfirmasi",
+    className: "bg-[var(--neutral-muted)] text-muted-foreground border-[var(--neutral-border)]",
+  },
   delivered: {
     label: "Tersampaikan",
     className: "bg-[var(--success-muted)] text-[var(--success)] border-[var(--success-border)]",

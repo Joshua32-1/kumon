@@ -11,9 +11,15 @@ export type WhatsAppDeliveryStatus =
 /**
  * Downstream confirmation from Meta's delivery webhook (not the send-API result):
  * whether the message actually reached/was read by the parent, or failed Meta-side.
- * "unknown" = sent but no callback yet (or delivery tracking not configured).
+ * "awaiting" = at least one message sent, no delivery callback yet; "unknown" = no
+ * tracked message at all (nothing sent, or sent before delivery tracking existed).
  */
-export type WhatsAppDeliveryConfirmation = "unknown" | "delivered" | "read" | "failed"
+export type WhatsAppDeliveryConfirmation =
+  | "unknown"
+  | "awaiting"
+  | "delivered"
+  | "read"
+  | "failed"
 
 /** Best (most-advanced) delivery confirmation across an invoice's message events. */
 export function getDeliveryConfirmation(
@@ -22,6 +28,8 @@ export function getDeliveryConfirmation(
   if (events.some((e) => e.read_at || e.status === "READ")) return "read"
   if (events.some((e) => e.delivered_at || e.status === "DELIVERED")) return "delivered"
   if (events.some((e) => e.status === "FAILED")) return "failed"
+  // Sent, but Meta hasn't confirmed delivery yet — distinct from "no message at all".
+  if (events.length > 0) return "awaiting"
   return "unknown"
 }
 
@@ -159,6 +167,7 @@ export const WA_STATUS_LABELS: Record<WhatsAppDeliveryStatus, string> = {
 /** Human-readable label for a delivery confirmation (Indonesian). */
 export const DELIVERY_CONFIRMATION_LABELS: Record<WhatsAppDeliveryConfirmation, string> = {
   unknown: "—",
+  awaiting: "Menunggu konfirmasi",
   delivered: "Tersampaikan",
   read: "Dibaca",
   failed: "Gagal terkirim",

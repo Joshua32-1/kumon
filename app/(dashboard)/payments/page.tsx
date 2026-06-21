@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { PageHeader } from "@/components/shared/PageHeader"
@@ -11,7 +11,10 @@ import { GenerateInvoicesDialog } from "@/features/payments/components/GenerateI
 import { SendPaymentLinksDialog } from "@/features/payments/components/SendPaymentLinksDialog"
 import { Button } from "@/components/ui/button"
 import { MessageCircle } from "lucide-react"
-import { getBillingSummary } from "@/features/payments/billing-summary"
+import {
+  getBillingSummary,
+  type WhatsAppDeliveryConfirmation,
+} from "@/features/payments/billing-summary"
 import { isArrearsInvoice } from "@/lib/billing/arrears"
 import { formatRupiah, currentMonthYearInCenterTimezone, todayInCenterTimezone } from "@/lib/utils"
 import type { InvoiceWithStudent, PaymentStatus } from "@/features/payments/types"
@@ -31,6 +34,15 @@ const STATUS_FILTERS: { label: string; value: PaymentStatus | "" }[] = [
   { label: "Lunas (link lama)", value: "PAID_OLD_LINK" },
 ]
 
+// Delivery-confirmation buckets (Meta callbacks), independent of payment status.
+const DELIVERY_FILTERS: { label: string; value: WhatsAppDeliveryConfirmation | "" }[] = [
+  { label: "Semua", value: "" },
+  { label: "Dibaca", value: "read" },
+  { label: "Tersampaikan", value: "delivered" },
+  { label: "Menunggu konfirmasi", value: "awaiting" },
+  { label: "Gagal terkirim", value: "failed" },
+]
+
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1)
 const { year: currentYear } = currentMonthYearInCenterTimezone()
 const YEARS = [currentYear - 1, currentYear, currentYear + 1]
@@ -45,6 +57,7 @@ export default function PaymentsPage() {
   const today = todayInCenterTimezone()
   const { month: defaultMonth, year: defaultYear } = currentMonthYearInCenterTimezone()
   const [statusFilter, setStatusFilter] = useState<PaymentStatus | "">("")
+  const [deliveryFilter, setDeliveryFilter] = useState<WhatsAppDeliveryConfirmation | "">("")
 
   useEffect(() => {
     const status = searchParams.get("status")
@@ -57,6 +70,15 @@ export default function PaymentsPage() {
       status === "PAID_OLD_LINK"
     ) {
       setStatusFilter(status)
+    }
+    const delivery = searchParams.get("delivery")
+    if (
+      delivery === "read" ||
+      delivery === "delivered" ||
+      delivery === "awaiting" ||
+      delivery === "failed"
+    ) {
+      setDeliveryFilter(delivery)
     }
   }, [searchParams])
 
@@ -89,6 +111,19 @@ export default function PaymentsPage() {
     fetcher
   )
 
+  // Compute each invoice's billing summary once per render (the getBillingSummary
+  // call is the costly bit) and reuse it for every filter and count below.
+  const summaries = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof getBillingSummary>>()
+    for (const inv of allInvoices) {
+      m.set(
+        inv.id,
+        getBillingSummary(inv, inv.payment_reminders ?? [], today, inv.message_events ?? [])
+      )
+    }
+    return m
+  }, [allInvoices, today])
+
   const baseInvoices = arrearsView
     ? allInvoices
         .filter((inv) => isArrearsInvoice(inv, today))
@@ -98,24 +133,31 @@ export default function PaymentsPage() {
         })
     : allInvoices
 
-  const invoices = attentionOnly
-    ? baseInvoices.filter((inv) => {
-        const s = getBillingSummary(inv, inv.payment_reminders ?? [], today, inv.message_events ?? [])
-        return s.attention === "needs_action"
-      })
+  const afterAttention = attentionOnly
+    ? baseInvoices.filter((inv) => summaries.get(inv.id)?.attention === "needs_action")
     : baseInvoices
 
-  const deliveryCount = allInvoices.filter((inv) => {
-    const s = getBillingSummary(inv, inv.payment_reminders ?? [], today, inv.message_events ?? [])
-    return s.attentionReason === "delivery"
-  }).length
+  const invoices = deliveryFilter
+    ? afterAttention.filter((inv) => summaries.get(inv.id)?.deliveryStatus === deliveryFilter)
+    : afterAttention
 
-  const collectionCount = allInvoices.filter((inv) => {
-    const s = getBillingSummary(inv, inv.payment_reminders ?? [], today, inv.message_events ?? [])
-    return s.attentionReason === "collection"
-  }).length
-
+  const deliveryCount = allInvoices.filter(
+    (inv) => summaries.get(inv.id)?.attentionReason === "delivery"
+  ).length
+  const collectionCount = allInvoices.filter(
+    (inv) => summaries.get(inv.id)?.attentionReason === "collection"
+  ).length
   const attentionCount = deliveryCount + collectionCount
+
+  // Per-bucket counts for the delivery filter pills. Computed over the post-attention
+  // set so a bucket's number matches exactly what you'll see when you select it.
+  const deliveryStatusCounts = afterAttention.reduce<
+    Partial<Record<WhatsAppDeliveryConfirmation, number>>
+  >((acc, inv) => {
+    const d = summaries.get(inv.id)?.deliveryStatus ?? "unknown"
+    acc[d] = (acc[d] ?? 0) + 1
+    return acc
+  }, {})
 
   const arrearsTotalRp = baseInvoices.reduce((s, inv) => s + inv.amount, 0)
 
@@ -151,13 +193,13 @@ export default function PaymentsPage() {
           <FilterPill
             label="Bulan ini"
             active={!arrearsView}
-            onClick={() => { setArrearsView(false); setStatusFilter("") }}
+            onClick={() => { setArrearsView(false); setStatusFilter(""); setDeliveryFilter("") }}
           />
           <FilterPill
             label="Semua tunggakan"
             active={arrearsView}
             variant="danger"
-            onClick={() => { setArrearsView(true); setStatusFilter("") }}
+            onClick={() => { setArrearsView(true); setStatusFilter(""); setDeliveryFilter("") }}
           />
         </div>
 
@@ -188,6 +230,21 @@ export default function PaymentsPage() {
             ))}
           </div>
         )}
+
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-4 shadow-card">
+          <span className="self-center text-sm text-muted-foreground">Pengiriman WA:</span>
+          {DELIVERY_FILTERS.map((f) => {
+            const count = f.value ? deliveryStatusCounts[f.value] ?? 0 : 0
+            return (
+              <FilterPill
+                key={f.value || "all"}
+                label={f.value && count > 0 ? `${f.label} (${count})` : f.label}
+                active={deliveryFilter === f.value}
+                onClick={() => setDeliveryFilter(f.value)}
+              />
+            )
+          })}
+        </div>
 
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-4 shadow-card">
           <FilterPill
