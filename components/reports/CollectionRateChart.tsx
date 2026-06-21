@@ -68,7 +68,8 @@ export function CollectionRateChart() {
 
   const points = (data?.points ?? []).map((p) => ({
     ...p,
-    pct: p.rate == null ? 0 : Math.round(p.rate * 100),
+    // null rate (nothing billed that month) → no bar (gap), distinct from a real 0%.
+    pct: p.rate == null ? null : Math.round(p.rate * 100),
   }))
 
   return (

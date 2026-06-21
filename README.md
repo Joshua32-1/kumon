@@ -146,7 +146,7 @@ Every slot runs Phase 1: for each invoice with a due (`scheduled_date <= today`)
 The **Laporan** page surfaces read-only analytics over existing data (no schema changes):
 - **Tingkat Penagihan (collection rate)** — `paid ÷ billed` per month (billed excludes CANCELLED/WAIVED; PAID_OLD_LINK counts as paid), with a period selector mirroring the revenue chart.
 - **Umur Tunggakan (arrears aging)** — outstanding invoices bucketed by days past due (0–30 / 31–60 / 61–90 / 90+) with counts and Rp totals.
-- **Pendaftaran vs. Nonaktif (enrollment vs. churn)** — new vs. deactivated students per month with net change (`deactivated_at` bucketed by WIB month).
+- **Pendaftaran vs. Nonaktif (enrollment vs. churn)** — new vs. deactivated students per month with net change and a **running active-students** line (`deactivated_at` bucketed by WIB month). The current-month collection rate is also surfaced as a dashboard KPI.
 - **Komposisi Mata Pelajaran (subject & level mix)** — active-student counts per subject and school level.
 - **Buku Pembayaran (payment ledger + CSV export)** — a year-scoped invoice ledger with a CSV download for bookkeeping; distinct from the month-scoped operational view on the Pembayaran page.
 
