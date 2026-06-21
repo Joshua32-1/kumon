@@ -37,6 +37,8 @@ export type StudentGrade =
 export type ReminderStatus = "PENDING" | "SENT" | "FAILED" | "CANCELLED"
 export type KumonSubject = "ENGLISH" | "INDONESIAN" | "MATHEMATICS"
 export type SchoolLevel = "ELEMENTARY" | "SECONDARY"
+export type MessageEventType = "REMINDER" | "CONFIRMATION"
+export type MessageDeliveryStatus = "SENT" | "DELIVERED" | "READ" | "FAILED"
 
 export interface Database {
   public: {
@@ -377,6 +379,72 @@ export interface Database {
           }
         ]
       }
+      message_events: {
+        Row: {
+          id: string
+          wamid: string
+          message_type: MessageEventType
+          invoice_id: string | null
+          reminder_id: string | null
+          recipient: string
+          status: MessageDeliveryStatus
+          error_code: string | null
+          error_title: string | null
+          sent_at: string
+          delivered_at: string | null
+          read_at: string | null
+          failed_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          wamid: string
+          message_type: MessageEventType
+          invoice_id?: string | null
+          reminder_id?: string | null
+          recipient: string
+          status?: MessageDeliveryStatus
+          error_code?: string | null
+          error_title?: string | null
+          sent_at?: string
+          delivered_at?: string | null
+          read_at?: string | null
+          failed_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          wamid?: string
+          message_type?: MessageEventType
+          invoice_id?: string | null
+          reminder_id?: string | null
+          recipient?: string
+          status?: MessageDeliveryStatus
+          error_code?: string | null
+          error_title?: string | null
+          sent_at?: string
+          delivered_at?: string | null
+          read_at?: string | null
+          failed_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_events_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_events_reminder_id_fkey"
+            columns: ["reminder_id"]
+            isOneToOne: false
+            referencedRelation: "payment_reminders"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       system_config: {
         Row: {
           key: string
@@ -404,6 +472,10 @@ export interface Database {
       create_invoice_with_lines: {
         Args: { p_invoice: Json; p_lines: Json; p_reminder_days: number[] }
         Returns: string
+      }
+      create_invoices_with_lines: {
+        Args: { p_invoices: Json; p_reminder_days: number[] }
+        Returns: string[]
       }
       promote_grades_annual: {
         Args: { p_promotion_year: number }
@@ -433,6 +505,8 @@ export interface Database {
       kumon_subject: KumonSubject
       school_level: SchoolLevel
       student_grade: StudentGrade
+      message_event_type: MessageEventType
+      message_delivery_status: MessageDeliveryStatus
     }
   }
 }

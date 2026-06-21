@@ -8,6 +8,7 @@ export const CRON_JOB_IDS = [
   "promote_grades",
   "sync_leave_status",
   "mark_overdue",
+  "billing_watchdog",
 ] as const
 
 export type CronJobId = (typeof CRON_JOB_IDS)[number]
@@ -61,6 +62,12 @@ export const CRON_JOBS: CronJobDefinition[] = [
     label: "Tandai Tagihan Terlambat",
     description: "Menandai tagihan yang sudah melewati jatuh tempo dan belum dibayar sebagai terlambat.",
     schedule: "Setiap hari, 00:30 WIB",
+  },
+  {
+    id: "billing_watchdog",
+    label: "Pengawas Tagihan",
+    description: "Memeriksa bahwa semua siswa aktif sudah memiliki tagihan bulan ini; mengirim email bila ada yang belum.",
+    schedule: "Setiap hari, 10:00 WIB",
   },
 ]
 

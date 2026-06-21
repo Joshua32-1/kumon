@@ -1,4 +1,4 @@
-import type { Invoice, PaymentReminder } from "./types"
+import type { Invoice, PaymentReminder, MessageEventSummary } from "./types"
 
 export type WhatsAppDeliveryStatus =
   | "not_applicable"  // no invoice (cuti / inactive / no subjects generated)
@@ -7,6 +7,23 @@ export type WhatsAppDeliveryStatus =
   | "sent"            // at least one SENT reminder
   | "send_failed"     // at least one FAILED, none SENT
   | "partial_failed"  // mix of SENT and FAILED
+
+/**
+ * Downstream confirmation from Meta's delivery webhook (not the send-API result):
+ * whether the message actually reached/was read by the parent, or failed Meta-side.
+ * "unknown" = sent but no callback yet (or delivery tracking not configured).
+ */
+export type WhatsAppDeliveryConfirmation = "unknown" | "delivered" | "read" | "failed"
+
+/** Best (most-advanced) delivery confirmation across an invoice's message events. */
+export function getDeliveryConfirmation(
+  events: MessageEventSummary[]
+): WhatsAppDeliveryConfirmation {
+  if (events.some((e) => e.read_at || e.status === "READ")) return "read"
+  if (events.some((e) => e.delivered_at || e.status === "DELIVERED")) return "delivered"
+  if (events.some((e) => e.status === "FAILED")) return "failed"
+  return "unknown"
+}
 
 export type BillingAttention = "none" | "needs_action"
 
@@ -19,6 +36,7 @@ export type AttentionReason = "delivery" | "collection" | null
 
 export interface BillingSummary {
   whatsappStatus: WhatsAppDeliveryStatus
+  deliveryStatus: WhatsAppDeliveryConfirmation
   attention: BillingAttention
   attentionReason: AttentionReason
   firstSentAt: string | null
@@ -52,7 +70,8 @@ export function getWhatsAppDeliveryStatus(
 export function getBillingAttentionWithReason(
   invoice: Invoice | null,
   reminders: PaymentReminder[],
-  today?: string
+  today?: string,
+  deliveryConfirmation?: WhatsAppDeliveryConfirmation
 ): { attention: BillingAttention; attentionReason: AttentionReason } {
   if (!invoice) return { attention: "none", attentionReason: null }
   if (
@@ -76,7 +95,10 @@ export function getBillingAttentionWithReason(
     waStatus === "link_not_sent" ||
     waStatus === "send_failed" ||
     waStatus === "partial_failed" ||
-    hasStrandedReminder
+    hasStrandedReminder ||
+    // Meta confirmed the message failed downstream even though the send-API accepted it —
+    // the parent never got it, so it needs the same attention as a send failure.
+    deliveryConfirmation === "failed"
 
   const isCollectionProblem =
     invoice.status === "OVERDUE" ||
@@ -103,13 +125,21 @@ export function getBillingAttention(
 export function getBillingSummary(
   invoice: Invoice | null,
   reminders: PaymentReminder[],
-  today?: string
+  today?: string,
+  messageEvents: MessageEventSummary[] = []
 ): BillingSummary {
   const whatsappStatus = getWhatsAppDeliveryStatus(invoice, reminders)
-  const { attention, attentionReason } = getBillingAttentionWithReason(invoice, reminders, today)
+  const deliveryStatus = getDeliveryConfirmation(messageEvents)
+  const { attention, attentionReason } = getBillingAttentionWithReason(
+    invoice,
+    reminders,
+    today,
+    deliveryStatus
+  )
   const firstSent = reminders.find((r) => r.status === "SENT" && r.sent_at)
   return {
     whatsappStatus,
+    deliveryStatus,
     attention,
     attentionReason,
     firstSentAt: firstSent?.sent_at ?? null,
@@ -124,4 +154,12 @@ export const WA_STATUS_LABELS: Record<WhatsAppDeliveryStatus, string> = {
   sent: "Terkirim",
   send_failed: "Gagal dikirim",
   partial_failed: "Sebagian gagal",
+}
+
+/** Human-readable label for a delivery confirmation (Indonesian). */
+export const DELIVERY_CONFIRMATION_LABELS: Record<WhatsAppDeliveryConfirmation, string> = {
+  unknown: "—",
+  delivered: "Tersampaikan",
+  read: "Dibaca",
+  failed: "Gagal terkirim",
 }

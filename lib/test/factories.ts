@@ -1,4 +1,8 @@
-import type { Invoice, PaymentReminder } from "@/features/payments/types"
+import type {
+  Invoice,
+  PaymentReminder,
+  MessageEventSummary,
+} from "@/features/payments/types"
 import type { Contact, Student } from "@/features/students/types"
 
 // Fully-typed fixtures for the arrears and billing-summary tests. Defaults
@@ -71,6 +75,18 @@ export function makeStudent(partial: Partial<Student> = {}): Student {
     notes: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+    ...partial,
+  }
+}
+
+export function makeMessageEvent(
+  partial: Partial<MessageEventSummary> = {}
+): MessageEventSummary {
+  return {
+    status: "SENT",
+    delivered_at: null,
+    read_at: null,
+    failed_at: null,
     ...partial,
   }
 }

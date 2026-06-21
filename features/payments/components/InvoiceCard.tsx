@@ -8,7 +8,11 @@ import { PaymentStatusBadge } from "./PaymentStatusBadge"
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { formatRupiah, getMonthName, formatDate, todayInCenterTimezone } from "@/lib/utils"
-import { getBillingSummary, WA_STATUS_LABELS } from "@/features/payments/billing-summary"
+import {
+  getBillingSummary,
+  WA_STATUS_LABELS,
+  DELIVERY_CONFIRMATION_LABELS,
+} from "@/features/payments/billing-summary"
 import {
   markPaidAction,
   waiveAction,
@@ -39,7 +43,12 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
   const isPaidOldLink = invoice.status === "PAID_OLD_LINK"
   const lineItems = invoice.invoice_line_items ?? []
   const reminders = invoice.payment_reminders ?? []
-  const summary = getBillingSummary(invoice, reminders, todayInCenterTimezone())
+  const summary = getBillingSummary(
+    invoice,
+    reminders,
+    todayInCenterTimezone(),
+    invoice.message_events ?? []
+  )
 
   async function handleMarkPaid() {
     setIsProcessing(true)
@@ -251,6 +260,14 @@ export function InvoiceCard({ invoice, onUpdate }: InvoiceCardProps) {
               <p className="text-muted-foreground">Status WA</p>
               <p className="font-medium">{WA_STATUS_LABELS[summary.whatsappStatus]}</p>
             </div>
+            {summary.deliveryStatus !== "unknown" && (
+              <div>
+                <p className="text-muted-foreground">Pengiriman WA</p>
+                <p className="font-medium">
+                  {DELIVERY_CONFIRMATION_LABELS[summary.deliveryStatus]}
+                </p>
+              </div>
+            )}
             {invoice.notes && (
               <div>
                 <p className="text-muted-foreground">Catatan</p>

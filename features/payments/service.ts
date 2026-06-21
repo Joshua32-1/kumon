@@ -83,6 +83,12 @@ import {
   type InvoiceStatusRow,
   type StudentSubjectRow,
 } from "@/lib/billing/generate-eligibility"
+import { findMissingInvoices, type MissingInvoice } from "@/lib/billing/watchdog"
+import {
+  DELIVERY_STATUS_RANK,
+  type MetaStatusEvent,
+} from "@/lib/messaging/delivery"
+import type { Database, MessageEventType, MessageDeliveryStatus } from "@/types/database"
 import {
   isReminderDay,
   isOverdueChaseEligible,
@@ -349,7 +355,7 @@ export const paymentService = {
     let query = supabase
       .from("invoices")
       .select(
-        "*, students(full_name, contacts(whatsapp_number, is_primary, full_name)), invoice_line_items(*), payment_reminders(id, reminder_number, scheduled_date, sent_at, status, message_preview)"
+        "*, students(full_name, contacts(whatsapp_number, is_primary, full_name)), invoice_line_items(*), payment_reminders(id, reminder_number, scheduled_date, sent_at, status, message_preview), message_events(status, delivered_at, read_at, failed_at)"
       )
       .order("year", { ascending: false })
       .order("month", { ascending: false })
@@ -371,7 +377,7 @@ export const paymentService = {
     const { data, error } = await supabase
       .from("invoices")
       .select(
-        "*, students(full_name, contacts(whatsapp_number, is_primary)), payment_reminders(*), invoice_line_items(*)"
+        "*, students(full_name, contacts(whatsapp_number, is_primary)), payment_reminders(*), invoice_line_items(*), message_events(status, delivered_at, read_at, failed_at)"
       )
       .eq("id", id)
       .single()
@@ -643,37 +649,33 @@ export const paymentService = {
 
     const reminderDays = await loadReminderDays(supabase)
 
-    // Insert each invoice + its line items + its reminders atomically (RPC = one transaction),
-    // so a mid-flow failure can never leave an invoice without its line items or reminders.
-    const invoiceIds: string[] = []
-    for (const { lines, ...inv } of invoicesWithLines) {
-      const { data: newId, error } = await supabase.rpc("create_invoice_with_lines", {
-        p_invoice: {
-          student_id: inv.student_id,
-          month: inv.month,
-          year: inv.year,
-          amount: inv.amount,
-          due_date: inv.due_date,
-          created_by: inv.created_by,
-          school_level_at_billing: inv.school_level_at_billing,
-          payment_access_token: inv.payment_access_token,
-        },
-        p_lines: lines,
-        p_reminder_days: reminderDays,
-      })
+    // One bulk RPC inserts the whole batch server-side — each student's invoice + line
+    // items + reminders in its own atomic sub-block — so 500 students cost one round-trip
+    // instead of 500, well within the cron timeout. Per-row duplicate-active-invoice
+    // conflicts (concurrent run / retry) are skipped inside the function; the returned
+    // ids are only the rows actually created.
+    const { data: createdIds, error } = await supabase.rpc("create_invoices_with_lines", {
+      p_invoices: invoicesWithLines.map(({ lines, ...inv }) => ({
+        student_id: inv.student_id,
+        month: inv.month,
+        year: inv.year,
+        amount: inv.amount,
+        due_date: inv.due_date,
+        created_by: inv.created_by,
+        school_level_at_billing: inv.school_level_at_billing,
+        payment_access_token: inv.payment_access_token,
+        lines,
+      })),
+      p_reminder_days: reminderDays,
+    })
 
-      if (error) {
-        // 23505 = unique_violation: an active invoice for this student/month/year already
-        // exists (e.g. a concurrent run won the race). Skip rather than fail the whole batch.
-        if (error.code === "23505") {
-          skippedExisting++
-          continue
-        }
-        throw Errors.INTERNAL(error.message)
-      }
-
-      if (newId) invoiceIds.push(newId as string)
+    if (error) {
+      throw Errors.INTERNAL(error.message)
     }
+
+    const invoiceIds: string[] = (createdIds as string[] | null) ?? []
+    // Students in the batch without a returned id were skipped on a duplicate-active conflict.
+    skippedExisting += invoicesWithLines.length - invoiceIds.length
 
     return {
       generated: invoiceIds.length,
@@ -697,6 +699,62 @@ export const paymentService = {
       today ?? todayInCenterTimezone()
     )
     return { marked }
+  },
+
+  /**
+   * Billing watchdog (read-only): assert that every billable student who should have
+   * an active invoice this period actually has one. Mirrors generateMonthlyAutomated's
+   * reads + eligibility exactly, so `missing` is non-empty only when generation failed
+   * or was disabled. Does not create, change, or send anything.
+   */
+  async runBillingWatchdog(input: {
+    month: number
+    year: number
+  }): Promise<{ healthy: boolean; month: number; year: number; missing: MissingInvoice[] }> {
+    const { month, year } = input
+
+    const { data: students } = await supabaseAdmin
+      .from("students")
+      .select("id, full_name, enrolled_at, student_subjects(subject, enrolled_at)")
+      .in("status", [...BILLABLE_STUDENT_STATUSES])
+
+    if (!students || students.length === 0) {
+      return { healthy: true, month, year, missing: [] }
+    }
+
+    const studentIds = students.map((s) => s.id)
+
+    const { data: leaves } = await supabaseAdmin
+      .from("temporary_leaves")
+      .select("student_id")
+      .eq("month", month)
+      .eq("year", year)
+      .in("student_id", studentIds)
+    const onLeaveIds = new Set((leaves ?? []).map((l) => l.student_id))
+
+    const { data: invoiceRows } = await supabaseAdmin
+      .from("invoices")
+      .select("student_id, status, created_at")
+      .eq("month", month)
+      .eq("year", year)
+      .in("student_id", studentIds)
+
+    const invoicesByStudent = new Map<string, InvoiceStatusRow[]>()
+    for (const row of invoiceRows ?? []) {
+      const list = invoicesByStudent.get(row.student_id) ?? []
+      list.push(row as InvoiceStatusRow)
+      invoicesByStudent.set(row.student_id, list)
+    }
+
+    const missing = findMissingInvoices({
+      students: students as Parameters<typeof findMissingInvoices>[0]["students"],
+      invoicesByStudent,
+      onLeaveIds,
+      month,
+      year,
+    })
+
+    return { healthy: missing.length === 0, month, year, missing }
   },
 
   async ensurePaymentAccessToken(invoiceId: string): Promise<string> {
@@ -1066,15 +1124,27 @@ export const paymentService = {
       return { ok: false, error: sendResult.error ?? "WhatsApp send failed" }
     }
 
-    await supabaseAdmin.from("payment_reminders").insert({
-      invoice_id: invoiceId,
-      student_id: invoice.student_id,
-      reminder_number: nextNumber,
-      scheduled_date: todayInCenterTimezone(),
-      status: "SENT" as const,
-      sent_at: new Date().toISOString(),
-      whatsapp_number: primaryContact.whatsapp_number,
-      message_preview: "[admin] Tagihan diperbarui — jumlah & link baru",
+    const { data: insertedReminder } = await supabaseAdmin
+      .from("payment_reminders")
+      .insert({
+        invoice_id: invoiceId,
+        student_id: invoice.student_id,
+        reminder_number: nextNumber,
+        scheduled_date: todayInCenterTimezone(),
+        status: "SENT" as const,
+        sent_at: new Date().toISOString(),
+        whatsapp_number: primaryContact.whatsapp_number,
+        message_preview: "[admin] Tagihan diperbarui — jumlah & link baru",
+      })
+      .select("id")
+      .single()
+
+    await paymentService._recordMessageEvent({
+      wamid: sendResult.message_id,
+      messageType: "REMINDER",
+      invoiceId,
+      reminderId: insertedReminder?.id ?? null,
+      recipient: primaryContact.whatsapp_number,
     })
 
     return { ok: true }
@@ -1225,6 +1295,13 @@ export const paymentService = {
           message_preview: `[${initiatedBy}] Pengingat ${targetReminder.reminder_number} — link dikirim`,
         })
         .eq("id", targetReminder.id)
+      await paymentService._recordMessageEvent({
+        wamid: sendResult.message_id,
+        messageType: "REMINDER",
+        invoiceId,
+        reminderId: targetReminder.id,
+        recipient: primaryContact.whatsapp_number,
+      })
       return { ok: true, reminderId: targetReminder.id }
     } else {
       const errMsg = sendResult.error ?? "WhatsApp send failed"
@@ -1661,12 +1738,90 @@ export const paymentService = {
       paymentWhatsAppContext(student, inv as Invoice)
     )
 
+    if (result.success) {
+      await paymentService._recordMessageEvent({
+        wamid: result.message_id,
+        messageType: "CONFIRMATION",
+        invoiceId,
+        recipient: primaryContact.whatsapp_number,
+      })
+    }
+
     return result.success ? { ok: true } : { ok: false, error: result.error ?? "Send failed" }
   },
 
   /** Resend payment confirmation WA for an already-paid invoice. */
   async sendPaymentConfirmationManual(invoiceId: string): Promise<{ ok: boolean; error?: string }> {
     return paymentService.sendPaymentConfirmationForInvoice(invoiceId)
+  },
+
+  /**
+   * Record a sent WhatsApp message (reminder/confirmation) keyed by Meta's wamid, so
+   * the Meta delivery webhook can later flip it to DELIVERED/READ/FAILED. No-op when
+   * the send returned no wamid (unconfigured provider). Duplicate wamid is ignored.
+   */
+  async _recordMessageEvent(input: {
+    wamid: string | undefined
+    messageType: MessageEventType
+    invoiceId: string
+    reminderId?: string | null
+    recipient: string
+  }): Promise<void> {
+    if (!input.wamid) return
+    const { error } = await supabaseAdmin.from("message_events").insert({
+      wamid: input.wamid,
+      message_type: input.messageType,
+      invoice_id: input.invoiceId,
+      reminder_id: input.reminderId ?? null,
+      recipient: input.recipient,
+      status: "SENT",
+    })
+    // 23505 = duplicate wamid (idempotent re-capture) — not an error worth surfacing.
+    if (error && error.code !== "23505") {
+      console.error("Failed to record message_event:", error.message)
+    }
+  },
+
+  /**
+   * Apply a Meta delivery-status callback to its message_events row. Forward-progress
+   * only (per DELIVERY_STATUS_RANK: SENT < FAILED < DELIVERED < READ) so out-of-order
+   * callbacks never downgrade — in particular a late `failed` can't overwrite a
+   * delivered/read message. Returns true when a row was advanced; unknown wamid → false.
+   */
+  async applyMessageDeliveryEvent(event: MetaStatusEvent): Promise<boolean> {
+    const { data: row } = await supabaseAdmin
+      .from("message_events")
+      .select("id, status")
+      .eq("wamid", event.wamid)
+      .maybeSingle()
+    if (!row) return false
+
+    const currentRank = DELIVERY_STATUS_RANK[row.status as MessageDeliveryStatus]
+    if (DELIVERY_STATUS_RANK[event.status] <= currentRank) return false
+
+    const ts = event.timestamp
+      ? new Date(event.timestamp * 1000).toISOString()
+      : new Date().toISOString()
+    const patch: Database["public"]["Tables"]["message_events"]["Update"] = {
+      status: event.status,
+    }
+    if (event.status === "DELIVERED") patch.delivered_at = ts
+    else if (event.status === "READ") patch.read_at = ts
+    else if (event.status === "FAILED") {
+      patch.failed_at = ts
+      patch.error_code = event.errorCode
+      patch.error_title = event.errorTitle
+    }
+
+    const { error } = await supabaseAdmin
+      .from("message_events")
+      .update(patch)
+      .eq("id", row.id)
+    if (error) {
+      console.error("Failed to apply delivery event:", error.message)
+      return false
+    }
+    return true
   },
 
   async handleMidtransWebhook(payload: MidtransWebhookPayload): Promise<MidtransWebhookResult> {

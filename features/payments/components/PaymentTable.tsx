@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation"
 import { DataTable, type Column } from "@/components/shared/DataTable"
 import { PaymentStatusBadge } from "./PaymentStatusBadge"
 import { StatusBadge } from "@/components/shared/StatusBadge"
-import { formatRupiah, getMonthName } from "@/lib/utils"
+import { formatRupiah, getMonthName, todayInCenterTimezone } from "@/lib/utils"
 import { getBillingSummary } from "@/features/payments/billing-summary"
 import type { InvoiceWithStudent } from "../types"
 
@@ -46,16 +46,33 @@ const columns: Column<InvoiceWithStudent>[] = [
     key: "wa_status",
     header: "Link WA",
     cell: (row) => {
-      const summary = getBillingSummary(row, row.payment_reminders ?? [])
+      const summary = getBillingSummary(
+        row,
+        row.payment_reminders ?? [],
+        todayInCenterTimezone(),
+        row.message_events ?? []
+      )
       if (summary.whatsappStatus === "not_applicable") return <span className="text-muted-foreground text-xs">—</span>
-      return <StatusBadge status={summary.whatsappStatus} />
+      return (
+        <div className="flex flex-col items-start gap-1">
+          <StatusBadge status={summary.whatsappStatus} />
+          {summary.deliveryStatus !== "unknown" && (
+            <StatusBadge status={summary.deliveryStatus} />
+          )}
+        </div>
+      )
     },
   },
   {
     key: "attention",
     header: "Tindakan",
     cell: (row) => {
-      const summary = getBillingSummary(row, row.payment_reminders ?? [])
+      const summary = getBillingSummary(
+        row,
+        row.payment_reminders ?? [],
+        todayInCenterTimezone(),
+        row.message_events ?? []
+      )
       if (summary.attentionReason === "delivery") {
         return <StatusBadge status="attention_delivery" />
       }

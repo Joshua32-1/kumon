@@ -78,6 +78,19 @@ const statusConfig: Record<string, { label: string; className: string }> = {
     label: "Sebagian gagal",
     className: "bg-[var(--warning-muted)] text-[var(--warning-foreground)] border-[var(--warning-border)]",
   },
+  // WhatsApp delivery confirmation (Meta callbacks)
+  delivered: {
+    label: "Tersampaikan",
+    className: "bg-[var(--success-muted)] text-[var(--success)] border-[var(--success-border)]",
+  },
+  read: {
+    label: "Dibaca",
+    className: "bg-[var(--info-muted)] text-[var(--info)] border-[var(--info-border)]",
+  },
+  failed: {
+    label: "Gagal terkirim",
+    className: "bg-[var(--danger-muted)] text-[var(--danger)] border-[var(--danger-border)]",
+  },
   // Attention
   needs_action: {
     label: "Perlu tindakan",
