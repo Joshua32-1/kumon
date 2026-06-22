@@ -2,9 +2,12 @@ import { type NextRequest } from "next/server"
 import { paymentService } from "@/features/payments/service"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { requireUser } from "@/lib/auth/user"
 import type { PaymentStatus } from "@/features/payments/types"
 
 export async function GET(request: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const { searchParams } = request.nextUrl
     const status = searchParams.get("status") as PaymentStatus | null

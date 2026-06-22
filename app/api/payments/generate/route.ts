@@ -3,8 +3,11 @@ import { paymentService } from "@/features/payments/service"
 import { generateMonthlySchema } from "@/features/payments/validations"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { requireUser } from "@/lib/auth/user"
 
 export async function POST(request: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const body = await request.json()
     const parsed = generateMonthlySchema.safeParse(body)

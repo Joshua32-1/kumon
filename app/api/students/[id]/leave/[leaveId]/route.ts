@@ -10,11 +10,14 @@ import {
   isPriorBillingPeriod,
 } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { requireUser } from "@/lib/auth/user"
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; leaveId: string }> }
 ) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const { id, leaveId } = await params
     const parsed = cancelLeaveSchema.safeParse({

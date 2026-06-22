@@ -15,7 +15,7 @@ Note: the dashboard UI mostly mutates through **server actions** (`features/*/ac
 
 ## Admin routes (session cookie via middleware)
 
-Unauthenticated requests are redirected to `/login` by [proxy.ts](proxy.ts).
+Unauthenticated requests are redirected to `/login` by [proxy.ts](proxy.ts). As defense-in-depth, every route below also self-guards with `requireUser` ([lib/auth/user.ts](lib/auth/user.ts)) and returns a `401 UNAUTHORIZED` `{data, error}` envelope when no valid session is present — independent of the middleware redirect, so a matcher/exemption drift fails closed.
 
 ### Students
 

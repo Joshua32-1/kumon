@@ -3,9 +3,12 @@ import { studentService } from "@/features/students/service"
 import { createStudentSchema } from "@/features/students/validations"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { requireUser } from "@/lib/auth/user"
 import type { StudentStatus } from "@/features/students/types"
 
 export async function GET(request: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const { searchParams } = request.nextUrl
     const status = searchParams.get("status") as StudentStatus | null
@@ -20,6 +23,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const body = await request.json()
     const parsed = createStudentSchema.safeParse(body)
