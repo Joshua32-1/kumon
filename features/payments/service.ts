@@ -92,7 +92,7 @@ import type { Database, MessageEventType, MessageDeliveryStatus } from "@/types/
 import {
   isReminderDay,
   isOverdueChaseEligible,
-  selectDueReminder,
+  selectReminderToSend,
 } from "@/lib/billing/reminder-selection"
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServerClient>>
@@ -1216,25 +1216,34 @@ export const paymentService = {
         return { ok: false, error: "Pengingat ini belum jatuh tempo" }
       }
     } else {
-      // Scheduled path (cron + manual "Kirim WA sekarang"): pick the HIGHEST-number due reminder —
-      // the most recent slot the parent should hear about — and supersede earlier due ones below,
-      // so a reminder stranded in the past (mid-month enrollment, cuti rebill) is never resurrected
-      // or mislabeled. The bulk link-send path (ignoreSchedule) keeps its original lowest-first,
-      // no-supersede behavior so it doesn't cancel still-scheduled reminders.
-      let q = supabaseAdmin
+      // Pick which reminder to act on. Both paths PREFER the HIGHEST-number due reminder
+      // (scheduled_date <= today) — the most recent slot the parent should hear about — and
+      // supersede the earlier due ones below, so a reminder stranded in the past (mid-month
+      // enrollment, cuti rebill) is never resurrected, mislabeled, or left for the cron to
+      // re-send. The bulk link-send path (ignoreSchedule) additionally falls back to the
+      // earliest still-future reminder when nothing is due yet — but only if nothing has
+      // been sent, so a re-run never advances the cadence (selectReminderToSend reads SENT
+      // rows for that check, which is why we fetch every status here, not just PENDING/FAILED).
+      //
+      // Unlike Phase-1 cron discovery (which limits FAILED rows to today so an ancient
+      // permanently-failing number isn't re-hit automatically), this refetch does NOT
+      // restrict FAILED by date: a past FAILED row is either superseded by a higher due row
+      // or, if it is the highest, retried once here. Automated re-entry is gated by Phase-1;
+      // this path only runs for an invoice the cron or an admin already selected to send.
+      const { data: rows } = await supabaseAdmin
         .from("payment_reminders")
         .select("*")
         .eq("invoice_id", invoiceId)
-        .in("status", ["PENDING", "FAILED"])
-      if (!ignoreSchedule) q = q.lte("scheduled_date", today)
-      const { data: rows } = await q
-      targetReminder = selectDueReminder((rows ?? []) as PaymentReminder[], {
-        ignoreSchedule,
-      })
+      const { target, supersede } = selectReminderToSend(
+        (rows ?? []) as PaymentReminder[],
+        { today, ignoreSchedule }
+      )
+      targetReminder = target
 
-      // Cancel older due reminders so they can't fire later (a subsequent cron slot or manual send)
-      // or be sent out of order. Mirrors ensureOverdueCatchUpReminder's stale-row cancellation.
-      if (targetReminder && !ignoreSchedule) {
+      // Cancel older due reminders so they can't fire later (a subsequent cron slot or manual
+      // send) or be sent out of order. Runs only when sending a due reminder; still-future rows
+      // are never touched. Mirrors ensureOverdueCatchUpReminder's stale-row cancellation.
+      if (targetReminder && supersede) {
         await supabaseAdmin
           .from("payment_reminders")
           .update({ status: "CANCELLED", message_preview: "Digantikan pengingat terbaru" })

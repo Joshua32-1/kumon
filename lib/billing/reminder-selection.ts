@@ -30,24 +30,40 @@ export function isOverdueChaseEligible(options: {
 }
 
 /**
- * Pick the reminder to act on from a candidate set (already filtered to
- * PENDING/FAILED, and to due rows for the scheduled path):
- * - scheduled path → the HIGHEST reminder_number (most recent slot), so a row
- *   stranded in the past is sent once and never out of order
- * - ignoreSchedule (bulk send) → the LOWEST reminder_number (original behavior)
+ * Decide which reminder to send and whether to supersede older due rows. Pass ALL of an
+ * invoice's reminders (any status); the helper picks among the sendable (PENDING/FAILED)
+ * ones and reads SENT rows only to decide whether the bulk push-ahead is allowed.
+ * - Prefer DUE rows (scheduled_date <= today): pick the HIGHEST reminder_number and
+ *   supersede the older due rows — the latest slot the parent should hear about. This
+ *   keeps a mid-month enrollment (all slots already past) from sending a stale
+ *   reminder 1 and stranding the rest for the cron to re-send.
+ * - If nothing is due yet: the scheduled path sends nothing (target null); the bulk
+ *   path (ignoreSchedule) falls back to the EARLIEST future row without superseding, so
+ *   an admin can push a link ahead of schedule — BUT only when nothing has been sent
+ *   yet, so a re-run never advances the cadence past a reminder the parent already got.
  *
- * Ties are not expected — reminder_number is unique per invoice — so the sort
- * order fully determines the pick (mirrors the SQL `ORDER BY reminder_number`).
+ * `scheduled_date` is compared as an ISO `YYYY-MM-DD` string (lexicographic == chronological),
+ * matching the SQL `scheduled_date <= today` predicates in the service. Ties are not
+ * expected — reminder_number is unique per invoice — so the sort fully determines the pick.
  */
-export function selectDueReminder<T extends { reminder_number: number }>(
+export function selectReminderToSend<
+  T extends { reminder_number: number; scheduled_date: string; status: string }
+>(
   reminders: T[],
-  options: { ignoreSchedule: boolean }
-): T | null {
-  if (reminders.length === 0) return null
-  const sorted = [...reminders].sort((a, b) =>
-    options.ignoreSchedule
-      ? a.reminder_number - b.reminder_number
-      : b.reminder_number - a.reminder_number
+  options: { today: string; ignoreSchedule: boolean }
+): { target: T | null; supersede: boolean } {
+  const sendable = reminders.filter(
+    (r) => r.status === "PENDING" || r.status === "FAILED"
   )
-  return sorted[0]
+  const due = sendable.filter((r) => r.scheduled_date <= options.today)
+  if (due.length > 0) {
+    const [highest] = [...due].sort((a, b) => b.reminder_number - a.reminder_number)
+    return { target: highest, supersede: true }
+  }
+  const alreadySent = reminders.some((r) => r.status === "SENT")
+  if (options.ignoreSchedule && sendable.length > 0 && !alreadySent) {
+    const [lowest] = [...sendable].sort((a, b) => a.reminder_number - b.reminder_number)
+    return { target: lowest, supersede: false }
+  }
+  return { target: null, supersede: false }
 }
