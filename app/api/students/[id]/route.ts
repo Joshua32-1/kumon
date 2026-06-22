@@ -3,11 +3,14 @@ import { studentService } from "@/features/students/service"
 import { updateStudentSchema, updateEnrollmentSchema, updateContactSchema } from "@/features/students/validations"
 import { apiSuccess, apiError } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
+import { requireUser } from "@/lib/auth/user"
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const { id } = await params
     const student = await studentService.getById(id)
@@ -22,6 +25,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const { id } = await params
     const body = await request.json()
@@ -60,6 +65,8 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const { id } = await params
     await studentService.deactivate(id)

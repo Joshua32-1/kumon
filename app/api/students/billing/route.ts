@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { apiSuccess, apiError, currentMonthYearInCenterTimezone, todayInCenterTimezone } from "@/lib/utils"
 import { AppError } from "@/lib/errors"
 import { getBillingSummary } from "@/features/payments/billing-summary"
+import { requireUser } from "@/lib/auth/user"
 import type { Invoice, PaymentReminder } from "@/features/payments/types"
 
 /**
@@ -13,6 +14,8 @@ import type { Invoice, PaymentReminder } from "@/features/payments/types"
  * which students to display. Students with no invoice show invoice: null.
  */
 export async function GET(request: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const { searchParams } = request.nextUrl
     const { month: currentMonth, year: currentYear } = currentMonthYearInCenterTimezone()

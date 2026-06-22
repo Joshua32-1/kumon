@@ -3,6 +3,7 @@ import { z } from "zod"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { persistFeeScheduleOnSettingsSave } from "@/lib/billing/load-subject-fees"
 import { apiSuccess, apiError } from "@/lib/utils"
+import { requireUser } from "@/lib/auth/user"
 
 // The only config keys the settings endpoint may write. Whitelisting prevents a
 // typo'd key from creating junk system_config rows or clobbering unrelated config.
@@ -29,6 +30,8 @@ const updateSchema = z.object({
 export { updateSchema as settingsUpdateSchema }
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const supabase = await createSupabaseServerClient()
     const { data, error } = await supabase.from("system_config").select("*")
@@ -40,6 +43,8 @@ export async function GET() {
 }
 
 export async function PATCH(request: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
   try {
     const body = await request.json()
     const parsed = updateSchema.safeParse(body)

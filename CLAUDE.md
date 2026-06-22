@@ -81,5 +81,6 @@ npx supabase gen types typescript --project-id <project-id> > types/database.ts
 - **Lazy Midtrans checkout**: Snap sessions are created only when a parent opens `/pay/{token}` — never during invoice generation or reminder send.
 - **One active invoice** per `student_id + month + year` (partial unique index excluding `CANCELLED`/`PAID_OLD_LINK`).
 - **Cron routes** must call `verifyCronAuth` ([lib/auth/cron.ts](lib/auth/cron.ts)), check their toggle via [lib/cron/enabled.ts](lib/cron/enabled.ts), and stay idempotent.
+- **In-handler auth**: every user/session API route under `app/api/` — everything except `app/api/webhooks/*`, `app/api/cron/*`, and `app/pay/[token]` — must call `requireUser` ([lib/auth/user.ts](lib/auth/user.ts)) as its first statement and early-return the result (`const denied = await requireUser(); if (denied) return denied`). Defense-in-depth behind the middleware redirect + RLS; new such routes inherit this rule.
 - **Messaging** goes through `messagingService` ([features/messaging/service.ts](features/messaging/service.ts)) with Meta named templates (`META_*` vars in [.env.local.example](.env.local.example) — the source of truth for template variable names).
 - **Migrations** in `supabase/migrations/` are numbered, applied manually in order; keep app deploys paired with schema state.

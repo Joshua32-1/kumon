@@ -51,6 +51,8 @@ Domain modules: `features/students/`, `features/payments/`, `features/messaging/
 
 [proxy.ts](proxy.ts) (Next.js middleware) refreshes the Supabase session and redirects unauthenticated users to `/login`, **exempting**: `/pay/*` (public parent links), `/api/webhooks/*`, `/api/cron/*`, and static assets.
 
+As defense-in-depth, every non-exempt API route also self-guards with `requireUser` ([lib/auth/user.ts](lib/auth/user.ts)) as its first statement — so if the middleware matcher or exemption list ever drifts, the route fails closed with a `401 UNAUTHORIZED` `{data, error}` envelope rather than leaking data. The exemption list (webhooks/cron/pay) is unchanged; those continue to authenticate via their own mechanisms below.
+
 Exempted routes authenticate themselves:
 
 - **Cron/manual** — `verifyCronAuth` in [lib/auth/cron.ts](lib/auth/cron.ts) accepts either `Authorization: Bearer {CRON_SECRET}` (what Vercel Cron sends on GET) or `x-api-key: {WEBHOOK_SECRET}` (manual POST with JSON overrides). `CRON_SECRET` is mandatory in production or all cron jobs 401.
@@ -72,7 +74,7 @@ Monthly cycle:
 7. **`mark-overdue`** (daily, 00:30 WIB) — flips every `PENDING` invoice whose `due_date < today` (WIB) to `OVERDUE`. This is the calendar-driven source of the persisted "Terlambat" status, decoupled from generation: it keeps the persisted `OVERDUE` status aligned with the derived "Tunggakan" past-due check (`PENDING && due_date < today`) even when generation doesn't run.
 8. **`billing-watchdog`** (daily, 10:00 WIB) — read-only invariant check: asserts every billable student who should have this month's invoice has one (`findMissingInvoices` reuses the exact `generate-invoices` eligibility, so the set is empty whenever generation succeeded). When non-empty it emails the admin via Resend. It's the daily backstop for the single-shot generation: the day-1 retries self-heal *transient* failures, the watchdog detects *persistent* ones (data bug, toggle off, broken deploy) that retries can't fix.
 
-**Failure alerting.** There is no general error monitor; instead the two crons with no code-level retry — `generate-invoices` and `promote-grades` — email the admin (`lib/alerts.ts` → Resend) on a *genuine* failure only (5xx/unexpected throw, not benign 4xx control flow, via `isAlertWorthyError`). Redundant/self-healing crons are intentionally not alerted per-failure to avoid noise. Alerts no-op silently when the `RESEND_API_KEY`/`ALERT_EMAIL_*` vars are unset.
+**Failure alerting.** There is no general error monitor; instead every cron route and both webhook handlers email the admin via `alertCronFailure` (`lib/alerts.ts` → Resend) on a *genuine* failure only (5xx/unexpected throw, not benign 4xx control flow, via `isAlertWorthyError`). Webhooks alert only on post-signature processing failures, never on signature rejection (hostile traffic). The `billing-watchdog` additionally emails when it detects missing invoices. Alerts no-op silently when the `RESEND_API_KEY`/`ALERT_EMAIL_*` vars are unset.
 
 ## Payment link lifecycle
 
