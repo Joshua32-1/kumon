@@ -1452,7 +1452,7 @@ export const paymentService = {
     const { data: unpaidPriorRows, error: overdueErr } = await supabaseAdmin
       .from("invoices")
       .select(
-        "id, student_id, month, year, status, students(status), payment_reminders(sent_at, status)"
+        "id, student_id, month, year, status, students(status, contacts(whatsapp_number, is_primary)), payment_reminders(sent_at, status)"
       )
       .in("status", ["OVERDUE", "PENDING"])
       .or(periodFilter)
@@ -1487,11 +1487,19 @@ export const paymentService = {
             (BILLABLE_STUDENT_STATUSES as readonly string[]).includes(studentStatus)
           )
         })
-        .map((inv) => ({
-          id: inv.id as string,
-          student_id: inv.student_id as string,
-          lastChasedAt: latestSentAt(inv.payment_reminders ?? []),
-        }))
+        .map((inv) => {
+          // Resolved here rather than per-invoice inside the loop: that round-trip was
+          // ~0.9s of every arrears send, the gap between Phase 2's measured 5.1s/send and
+          // Phase 1's 4.2s. Same primary-contact rule the send path itself uses.
+          const contacts = (inv.students?.contacts ?? []) as Contact[]
+          const primaryContact = contacts.find((c: Contact) => c.is_primary) ?? contacts[0]
+          return {
+            id: inv.id as string,
+            student_id: inv.student_id as string,
+            whatsappNumber: (primaryContact?.whatsapp_number as string | undefined) ?? null,
+            lastChasedAt: latestSentAt(inv.payment_reminders ?? []),
+          }
+        })
     )
 
     for (const inv of chaseCandidates) {
@@ -1500,14 +1508,7 @@ export const paymentService = {
         return result
       }
 
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("whatsapp_number")
-        .eq("student_id", inv.student_id)
-        .eq("is_primary", true)
-        .single()
-
-      if (!contact?.whatsapp_number) {
+      if (!inv.whatsappNumber) {
         result.skipped++
         continue
       }
@@ -1516,7 +1517,7 @@ export const paymentService = {
         inv.id,
         inv.student_id,
         today,
-        contact.whatsapp_number
+        inv.whatsappNumber
       )
       if (!catchUp) {
         result.skipped++

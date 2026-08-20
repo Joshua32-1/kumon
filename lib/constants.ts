@@ -4,11 +4,15 @@ export const BILLABLE_STUDENT_STATUSES = ["ACTIVE", "TEMPORARY_LEAVE"] as const
 /**
  * Ten 30-min morning slots on reminder days (09:00–13:30 WIB).
  *
- * Capacity is governed by REMINDER_RUN_BUDGET_MS, not by the batch limit: a send
- * costs `delayMs` plus ~2.2s of Meta API + DB write, so at the 500 ms default each
- * slot fits ~100 sends and the day ~1000 — just above the ~900 owed (current month
- * plus up to REMINDER_CHASE_MAX_PRIOR_MONTHS of arrears). The margin is thin, so
- * treat a persistent `truncated: true` as the signal to revisit these numbers.
+ * Capacity is governed by REMINDER_RUN_BUDGET_MS, not by the batch limit: a send costs
+ * `delayMs` plus ~2.2s of Meta API + DB write, so at the 500 ms default each slot fits
+ * ~100 sends and the day ~1000 — just above the ~900 owed (current month plus up to
+ * REMINDER_CHASE_MAX_PRIOR_MONTHS of arrears).
+ *
+ * Both phases now cost the same per send; Phase 2 used to run ~0.9s slower because it
+ * looked a contact up per invoice. The margin over what's owed is thin, so treat a
+ * persistent `truncated: true` as the signal to revisit these numbers — the next lever
+ * is a plan that allows a maxDuration above the 300s Hobby ceiling.
  */
 export const REMINDER_SLOT_COUNT = 10
 /**
