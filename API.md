@@ -104,14 +104,18 @@ In the Meta dashboard, set the callback URL to `{NEXT_PUBLIC_APP_URL}/api/webhoo
 |---|---|---|---|---|
 | `generate-invoices` | `0 0 1 * *`, `0 1 1 * *`, `30 1 1 * *` → 1st 07:00 / 08:00 / 08:30 (idempotent retries, all before the 09:00 reminder slot) | 120 | `month` 1–12, `year` ≥2020 (default: current WIB month) | `generated`, … (201 if `generated > 0`) |
 | `backfill-payment-links` | `30 0 * * *` → daily 07:30 | 60 | `month`, `year`, `batch_limit` 1–200 | `created`, … (201 if `created > 0`) |
-| `send-reminders` | 10 slots: `0,30 2-6 1,11,21 * *` → 09:00–13:30 on the 1st/11th/21st | 300 | `date` `YYYY-MM-DD`, `slot` 1–10 (default: slot inferred from WIB clock; non-reminder days behave as slot 10) | sent/failed counts per phase |
+| `send-reminders` | 10 slots: `0,30 2-6 1,11,21 * *` → 09:00–13:30 on the 1st/11th/21st | 600 | `date` `YYYY-MM-DD`, `slot` 1–10 (default: slot inferred from WIB clock; non-reminder days behave as slot 10), `batchLimit` ≥1 (manual canary cap) | sent/failed counts per phase, `truncated` |
 | `reconcile-payments` | `0 15 * * *` → daily 22:00 | — | none (fixed `minAgeHours: 6`) | reconciliation summary |
 | `promote-grades` | `0 17 30 6 *` → Jul 1 07:00 | — | `force` bool, `promotionYear` ≥2020 (**required with `force` outside July**) | `promoted`/`unchanged`/`already_promoted` |
 | `sync-leave-status` | `15 17 * * *` → daily 00:15 | — | none | `month`, `year`, `marked_on_leave`, `reactivated` |
 | `mark-overdue` | `30 17 * * *` → daily 00:30 | 60 | `today` `YYYY-MM-DD` (default: WIB today; for testing the boundary) | `marked` |
 | `billing-watchdog` | `0 3 * * *` → daily 10:00 | 60 | none (uses current WIB month) | `healthy`, `missing`, `missing_count`, `alert_sent` |
 
-Slot semantics: every slot runs Phase 1 — for each invoice with a due (`scheduled_date <= today`) unsent reminder, send only its latest due reminder and cancel earlier due rows ("Digantikan pengingat terbaru"); slot 10 additionally chases overdue/prior months (Phase 2). Constants in [lib/constants.ts](lib/constants.ts).
+Slot semantics: every slot runs Phase 1 — for each invoice with a due (`scheduled_date <= today`) unsent reminder, send only its latest due reminder and cancel earlier due rows ("Digantikan pengingat terbaru"); slots ≥ `REMINDER_PHASE2_START_SLOT` (3) additionally chase overdue/prior months (Phase 2). Phase 1 always drains first inside an invocation, so Phase 2 only spends leftover budget. Constants in [lib/constants.ts](lib/constants.ts).
+
+Phase 2 reaches back at most `REMINDER_CHASE_MAX_PRIOR_MONTHS` (3) billing periods — the query filters to that window server-side, so the scanned set stays flat as unpaid history accumulates. Candidates are ordered **least-recently-contacted first** (never-chased ahead of all, then oldest send, tie-broken by id), so an invoice cut off by a limit leads the next run instead of the same prefix being chased every time.
+
+A run stops at whichever comes first: `batchLimit` sends or `REMINDER_RUN_BUDGET_MS` (9 min) of wall clock, and returns `truncated: true`. The time budget sits below the route's `maxDuration` of 600 s deliberately — it lets the handler return its own result rather than be killed mid-loop, which would discard the counts and hide the dropped work.
 
 `mark-overdue` flips every `PENDING` invoice whose `due_date < today` (WIB) to `OVERDUE`. This is the calendar-driven source of the persisted `OVERDUE` ("Terlambat") status — independent of invoice generation. Invoice generation runs the same date-based sweep (its `marked_overdue` count), so the two never disagree.
 
@@ -136,6 +140,7 @@ curl -X POST http://localhost:3000/api/cron/generate-invoices \
 curl -X POST http://localhost:3000/api/cron/send-reminders \
   -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
   -d '{"slot": 10}'   # Phase 1 remainder + overdue chase
+                     # add "batchLimit": 3 for a controlled canary run
 
 curl -X POST http://localhost:3000/api/cron/promote-grades \
   -H "x-api-key: $WEBHOOK_SECRET" -H "Content-Type: application/json" \

@@ -1,4 +1,4 @@
-import { billingPeriodIndex } from "@/lib/billing/billing-period"
+import { billingPeriodIndex, shiftBillingPeriod } from "@/lib/billing/billing-period"
 import { currentMonthYearInCenterTimezone, getMonthName } from "@/lib/utils"
 
 export type RevenueChartPeriod =
@@ -41,18 +41,6 @@ export interface RevenueChartData {
   period: RevenueChartPeriod
   total: number
   points: RevenueChartPoint[]
-}
-
-function shiftBillingPeriod(
-  month: number,
-  year: number,
-  deltaMonths: number
-): { month: number; year: number } {
-  const idx = billingPeriodIndex(month, year) + deltaMonths
-  return {
-    year: Math.floor((idx - 1) / 12),
-    month: ((idx - 1) % 12) + 1,
-  }
 }
 
 export function isRevenueChartPeriod(value: string): value is RevenueChartPeriod {

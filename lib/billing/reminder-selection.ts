@@ -1,4 +1,5 @@
 import { isPriorBillingPeriod, dayOfMonthFromDateString } from "@/lib/utils"
+import { billingPeriodIndex, shiftBillingPeriod } from "@/lib/billing/billing-period"
 import type { PaymentStatus } from "@/features/payments/types"
 
 // Pure reminder-pipeline decision helpers (extracted from
@@ -13,6 +14,10 @@ export function isReminderDay(today: string, reminderDays: number[]): boolean {
 /**
  * An unpaid invoice is eligible for the Phase-2 overdue chase when it is OVERDUE,
  * or PENDING but from a billing period prior to the current month.
+ *
+ * `maxPriorMonths` bounds how far back the chase reaches, so per-household message
+ * volume stays flat as unpaid invoices accumulate instead of growing a message per
+ * unpaid month forever. Omit it to consider every prior period (the pre-cap behaviour).
  */
 export function isOverdueChaseEligible(options: {
   status: PaymentStatus
@@ -20,13 +25,81 @@ export function isOverdueChaseEligible(options: {
   year: number
   currentMonth: number
   currentYear: number
+  maxPriorMonths?: number
 }): boolean {
-  const { status, month, year, currentMonth, currentYear } = options
-  if (status === "OVERDUE") return true
-  if (status === "PENDING") {
-    return isPriorBillingPeriod(month, year, currentMonth, currentYear)
+  const { status, month, year, currentMonth, currentYear, maxPriorMonths } = options
+
+  const statusEligible =
+    status === "OVERDUE" ||
+    (status === "PENDING" &&
+      isPriorBillingPeriod(month, year, currentMonth, currentYear))
+  if (!statusEligible) return false
+  if (maxPriorMonths == null) return true
+
+  // A future-dated period is never chased; 0 = the current month (an OVERDUE invoice
+  // whose due date has already passed within this month).
+  const monthsAgo =
+    billingPeriodIndex(currentMonth, currentYear) - billingPeriodIndex(month, year)
+  return monthsAgo >= 0 && monthsAgo <= maxPriorMonths
+}
+
+/**
+ * The billing periods the Phase-2 chase may touch: the current one (for invoices already
+ * OVERDUE within this month) plus `maxPriorMonths` before it, newest first.
+ *
+ * The service turns this into a DB-side filter so the query returns only chaseable rows,
+ * keeping the scanned set flat as unpaid history accumulates instead of growing with every
+ * month that goes unpaid.
+ */
+export function chaseWindowPeriods(
+  currentMonth: number,
+  currentYear: number,
+  maxPriorMonths: number
+): { month: number; year: number }[] {
+  const periods: { month: number; year: number }[] = []
+  for (let back = 0; back <= maxPriorMonths; back++) {
+    periods.push(shiftBillingPeriod(currentMonth, currentYear, -back))
   }
-  return false
+  return periods
+}
+
+/**
+ * Most recent successful send for an invoice, or null when it has never been contacted.
+ * Any SENT reminder counts — scheduled or catch-up — because the rotation key we want is
+ * "who has gone longest without hearing from us", not "who has had a chase row written".
+ */
+export function latestSentAt(
+  reminders: { sent_at: string | null; status: string }[]
+): string | null {
+  let latest: string | null = null
+  for (const r of reminders) {
+    if (r.status !== "SENT" || !r.sent_at) continue
+    if (latest === null || r.sent_at > latest) latest = r.sent_at
+  }
+  return latest
+}
+
+/**
+ * Order chase candidates least-recently-contacted first: never-chased ahead of everyone,
+ * then oldest send first, tie-broken by id so the order is total and reproducible.
+ *
+ * Without this the Phase-2 query came back in PostgREST's physical order and every run
+ * truncated at the same point, so the same prefix was chased on every reminder day while
+ * the tail was never reached at all. Rotation is what makes a partial run fair: whoever
+ * gets cut off this run sorts to the front of the next one.
+ */
+export function sortChaseCandidates<T extends { id: string; lastChasedAt: string | null }>(
+  candidates: T[]
+): T[] {
+  return [...candidates].sort((a, b) => {
+    if (a.lastChasedAt === null && b.lastChasedAt !== null) return -1
+    if (a.lastChasedAt !== null && b.lastChasedAt === null) return 1
+    if (a.lastChasedAt !== null && b.lastChasedAt !== null) {
+      if (a.lastChasedAt < b.lastChasedAt) return -1
+      if (a.lastChasedAt > b.lastChasedAt) return 1
+    }
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  })
 }
 
 /**

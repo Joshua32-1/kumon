@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   billingPeriodIndex,
+  shiftBillingPeriod,
   isBillingPeriodBeforeEnrollment,
   isPastBillingPeriod,
   filterSubjectsForBillingPeriod,
@@ -74,5 +75,21 @@ describe("filterSubjectsForBillingPeriod", () => {
   it("drops everything when the period precedes all enrollments", () => {
     const result = filterSubjectsForBillingPeriod(subjects, 12, 2025)
     expect(result).toHaveLength(0)
+  })
+})
+
+describe("shiftBillingPeriod", () => {
+  it("moves within a year", () => {
+    expect(shiftBillingPeriod(8, 2026, -3)).toEqual({ month: 5, year: 2026 })
+    expect(shiftBillingPeriod(5, 2026, 3)).toEqual({ month: 8, year: 2026 })
+  })
+
+  it("rolls the year over in both directions", () => {
+    expect(shiftBillingPeriod(2, 2027, -3)).toEqual({ month: 11, year: 2026 })
+    expect(shiftBillingPeriod(11, 2026, 3)).toEqual({ month: 2, year: 2027 })
+  })
+
+  it("is a no-op at zero", () => {
+    expect(shiftBillingPeriod(12, 2026, 0)).toEqual({ month: 12, year: 2026 })
   })
 })

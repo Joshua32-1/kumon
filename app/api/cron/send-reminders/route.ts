@@ -15,13 +15,16 @@ import {
   REMINDER_SLOT_INFER_OFFSET_MIN,
 } from "@/lib/constants"
 
-// Allow up to 5 minutes per slot (100 sends × 2s delay ≈ 3.3 min)
-export const maxDuration = 300
+// Allow up to 10 minutes per slot. The service stops itself at REMINDER_RUN_BUDGET_MS
+// (9 min) so it can return `truncated: true` rather than be killed mid-loop here.
+export const maxDuration = 600
 
 const bodySchema = z
   .object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     slot: z.number().int().min(1).max(REMINDER_SLOT_COUNT).optional(),
+    // Manual-override only (x-api-key POST): caps sends for a controlled canary run.
+    batchLimit: z.number().int().min(1).optional(),
   })
   .optional()
 
@@ -63,6 +66,7 @@ async function handleSendReminders(request: NextRequest) {
   try {
     let date: string | undefined
     let slot: number | undefined
+    let batchLimit: number | undefined
 
     if (request.method === "POST") {
       try {
@@ -71,6 +75,7 @@ async function handleSendReminders(request: NextRequest) {
         if (parsed.success) {
           date = parsed.data?.date
           slot = parsed.data?.slot
+          batchLimit = parsed.data?.batchLimit
         }
       } catch {
         // Empty body — use today's date in WIB
@@ -87,6 +92,7 @@ async function handleSendReminders(request: NextRequest) {
     const result = await paymentService.processDueReminders(date, {
       slot: effectiveSlot,
       ...slotOptions(effectiveSlot),
+      ...(batchLimit != null ? { batchLimit } : {}),
     })
 
     return apiSuccess(result)
