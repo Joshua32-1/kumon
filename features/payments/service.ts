@@ -15,7 +15,14 @@ import {
   type PaymentWhatsAppContext,
 } from "@/features/messaging/service"
 import { Errors } from "@/lib/errors"
-import { DEFAULT_REMINDER_DAYS, BILLABLE_STUDENT_STATUSES } from "@/lib/constants"
+import {
+  DEFAULT_REMINDER_DAYS,
+  BILLABLE_STUDENT_STATUSES,
+  REMINDER_RUN_BUDGET_MS,
+  REMINDER_CHASE_MAX_PRIOR_MONTHS,
+  REMINDER_BATCH_LIMIT_DEFAULT,
+  WHATSAPP_SEND_DELAY_MS_DEFAULT,
+} from "@/lib/constants"
 import {
   toDateString,
   lastDayOfMonth,
@@ -93,6 +100,9 @@ import {
   isReminderDay,
   isOverdueChaseEligible,
   selectReminderToSend,
+  sortChaseCandidates,
+  latestSentAt,
+  chaseWindowPeriods,
 } from "@/lib/billing/reminder-selection"
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServerClient>>
@@ -1323,10 +1333,17 @@ export const paymentService = {
    * Send WhatsApp reminders for the current slot.
    *
    * Designed for a ten-slot morning schedule on reminder days (1/11/21):
-   *   Slots 1-9 (09:00–13:00 WIB): Phase 1 only — current-month scheduled reminders
-   *   Slot 10 (13:30 WIB): Phase 1 + Phase 2 — plus overdue/prior-month chase
+   *   Slots 1-2 (09:00–09:30 WIB): Phase 1 only — current-month scheduled reminders
+   *   Slots 3-10 (10:00–13:30 WIB): Phase 1 + Phase 2 — plus overdue/prior-month chase
    *
-   * Each slot sends at most `batchLimit` messages with `delayMs` between each.
+   * Phase 1 always drains before Phase 2 inside a single invocation, so an early
+   * Phase 2 start never delays a current-month parent — the chase only spends
+   * whatever budget Phase 1 left.
+   *
+   * A slot stops at whichever comes first: `batchLimit` sends or REMINDER_RUN_BUDGET_MS
+   * of wall clock. The budget is the real governor and exists so the handler returns
+   * `truncated: true` under its own control rather than being killed mid-loop by the
+   * platform timeout, which would discard the result and hide the dropped work.
    * Deduplication is automatic: Phase 1 rows become SENT; Phase 2 skips invoices
    * whose catch-up reminder for today is already SENT.
    */
@@ -1340,10 +1357,18 @@ export const paymentService = {
     }
   ): Promise<ReminderProcessResult> {
     const today = date ?? todayInCenterTimezone()
-    const batchLimit = options?.batchLimit ?? Number(process.env.WHATSAPP_BATCH_LIMIT ?? 100)
-    const delayMs = options?.delayMs ?? Number(process.env.WHATSAPP_SEND_DELAY_MS ?? 2000)
+    const batchLimit =
+      options?.batchLimit ??
+      Number(process.env.WHATSAPP_BATCH_LIMIT ?? REMINDER_BATCH_LIMIT_DEFAULT)
+    const delayMs =
+      options?.delayMs ??
+      Number(process.env.WHATSAPP_SEND_DELAY_MS ?? WHATSAPP_SEND_DELAY_MS_DEFAULT)
     const includeOverdueChase = options?.includeOverdueChase ?? true
     const slot = options?.slot
+
+    // Elapsed wall clock only — no calendar math, so this is deliberately not a WIB helper.
+    const startedAt = Date.now()
+    const outOfTime = () => Date.now() - startedAt >= REMINDER_RUN_BUDGET_MS
 
     const result: ReminderProcessResult = {
       processed: 0,
@@ -1392,7 +1417,7 @@ export const paymentService = {
     )
 
     for (const invoiceId of dueInvoiceIds) {
-      if (result.processed >= batchLimit) {
+      if (result.processed >= batchLimit || outOfTime()) {
         result.truncated = true
         return result
       }
@@ -1412,50 +1437,78 @@ export const paymentService = {
 
     const { month: currentMonth, year: currentYear } = monthYearFromDateString(today)
 
+    // Restrict the fetch to the chase window instead of pulling every unpaid invoice ever
+    // written, so the scanned set stays flat as unpaid history accumulates rather than
+    // growing without bound. (This project sets no PostgREST `db-max-rows`, so nothing is
+    // silently truncated today — the bound is what keeps that true.)
+    const periodFilter = chaseWindowPeriods(
+      currentMonth,
+      currentYear,
+      REMINDER_CHASE_MAX_PRIOR_MONTHS
+    )
+      .map((p) => `and(year.eq.${p.year},month.eq.${p.month})`)
+      .join(",")
+
     const { data: unpaidPriorRows, error: overdueErr } = await supabaseAdmin
       .from("invoices")
-      .select("id, student_id, month, year, status, students(status)")
+      .select(
+        "id, student_id, month, year, status, students(status, contacts(whatsapp_number, is_primary)), payment_reminders(sent_at, status)"
+      )
       .in("status", ["OVERDUE", "PENDING"])
+      .or(periodFilter)
 
     if (overdueErr) throw Errors.INTERNAL(overdueErr.message)
 
-    for (const row of unpaidPriorRows ?? []) {
-      if (result.processed >= batchLimit) {
+    // Order least-recently-contacted first. This is what makes a partial run fair: any
+    // invoice cut off by the batch/time limit sorts to the front of the next run, instead
+    // of the query's physical order handing the same prefix every send and starving the
+    // tail permanently.
+    const chaseCandidates = sortChaseCandidates(
+      (unpaidPriorRows ?? [])
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((row) => row as any)
+        .filter((inv) => {
+          if (processedInvoiceIds.has(inv.id)) return false
+          if (
+            !isOverdueChaseEligible({
+              status: inv.status,
+              month: inv.month,
+              year: inv.year,
+              currentMonth,
+              currentYear,
+              maxPriorMonths: REMINDER_CHASE_MAX_PRIOR_MONTHS,
+            })
+          ) {
+            return false
+          }
+          const studentStatus = inv.students?.status as string | undefined
+          return (
+            !!studentStatus &&
+            (BILLABLE_STUDENT_STATUSES as readonly string[]).includes(studentStatus)
+          )
+        })
+        .map((inv) => {
+          // Resolved here rather than per-invoice inside the loop: that round-trip was
+          // ~0.9s of every arrears send, the gap between Phase 2's measured 5.1s/send and
+          // Phase 1's 4.2s. Same primary-contact rule the send path itself uses.
+          const contacts = (inv.students?.contacts ?? []) as Contact[]
+          const primaryContact = contacts.find((c: Contact) => c.is_primary) ?? contacts[0]
+          return {
+            id: inv.id as string,
+            student_id: inv.student_id as string,
+            whatsappNumber: (primaryContact?.whatsapp_number as string | undefined) ?? null,
+            lastChasedAt: latestSentAt(inv.payment_reminders ?? []),
+          }
+        })
+    )
+
+    for (const inv of chaseCandidates) {
+      if (result.processed >= batchLimit || outOfTime()) {
         result.truncated = true
         return result
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const inv = row as any
-      if (
-        !isOverdueChaseEligible({
-          status: inv.status,
-          month: inv.month,
-          year: inv.year,
-          currentMonth,
-          currentYear,
-        })
-      ) {
-        continue
-      }
-
-      const studentStatus = inv.students?.status as string | undefined
-      if (
-        !studentStatus ||
-        !(BILLABLE_STUDENT_STATUSES as readonly string[]).includes(studentStatus)
-      ) {
-        continue
-      }
-      if (processedInvoiceIds.has(inv.id)) continue
-
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("whatsapp_number")
-        .eq("student_id", inv.student_id)
-        .eq("is_primary", true)
-        .single()
-
-      if (!contact?.whatsapp_number) {
+      if (!inv.whatsappNumber) {
         result.skipped++
         continue
       }
@@ -1464,7 +1517,7 @@ export const paymentService = {
         inv.id,
         inv.student_id,
         today,
-        contact.whatsapp_number
+        inv.whatsappNumber
       )
       if (!catchUp) {
         result.skipped++
@@ -1578,7 +1631,8 @@ export const paymentService = {
     const batchLimit =
       options?.batchLimit ?? Number(process.env.WHATSAPP_BATCH_LIMIT ?? 100)
     const delayMs =
-      options?.delayMs ?? Number(process.env.WHATSAPP_SEND_DELAY_MS ?? 2000)
+      options?.delayMs ??
+      Number(process.env.WHATSAPP_SEND_DELAY_MS ?? WHATSAPP_SEND_DELAY_MS_DEFAULT)
 
     const { candidates } = await paymentService.listPaymentLinkSendCandidates(
       month,

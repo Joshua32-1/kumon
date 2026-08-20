@@ -5,6 +5,19 @@ export function billingPeriodIndex(month: number, year: number): number {
   return year * 12 + month
 }
 
+/** Move a billing period by whole months, rolling the year over as needed. */
+export function shiftBillingPeriod(
+  month: number,
+  year: number,
+  deltaMonths: number
+): { month: number; year: number } {
+  const idx = billingPeriodIndex(month, year) + deltaMonths
+  return {
+    year: Math.floor((idx - 1) / 12),
+    month: ((idx - 1) % 12) + 1,
+  }
+}
+
 /** True when billing month/year is strictly before the calendar month of enrolled_at. */
 export function isBillingPeriodBeforeEnrollment(
   enrolledAt: string,
