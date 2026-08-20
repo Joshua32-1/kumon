@@ -15,9 +15,9 @@ import {
   REMINDER_SLOT_INFER_OFFSET_MIN,
 } from "@/lib/constants"
 
-// Allow up to 10 minutes per slot. The service stops itself at REMINDER_RUN_BUDGET_MS
-// (9 min) so it can return `truncated: true` rather than be killed mid-loop here.
-export const maxDuration = 600
+// 300s is the Hobby-plan ceiling. The service stops itself at REMINDER_RUN_BUDGET_MS
+// (4.5 min) so it can return `truncated: true` rather than be killed mid-loop here.
+export const maxDuration = 300
 
 const bodySchema = z
   .object({

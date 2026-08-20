@@ -5,9 +5,10 @@ export const BILLABLE_STUDENT_STATUSES = ["ACTIVE", "TEMPORARY_LEAVE"] as const
  * Ten 30-min morning slots on reminder days (09:00–13:30 WIB).
  *
  * Capacity is governed by REMINDER_RUN_BUDGET_MS, not by the batch limit: a send
- * costs `delayMs` plus ~2.2s of Meta API + DB write, so at the 1000 ms default
- * each slot fits ~170 sends and the day ~1700 — comfortably above the ~900 owed
- * (current month + up to REMINDER_CHASE_MAX_PRIOR_MONTHS of arrears).
+ * costs `delayMs` plus ~2.2s of Meta API + DB write, so at the 500 ms default each
+ * slot fits ~100 sends and the day ~1000 — just above the ~900 owed (current month
+ * plus up to REMINDER_CHASE_MAX_PRIOR_MONTHS of arrears). The margin is thin, so
+ * treat a persistent `truncated: true` as the signal to revisit these numbers.
  */
 export const REMINDER_SLOT_COUNT = 10
 /**
@@ -24,10 +25,11 @@ export const REMINDER_SLOT_INFER_OFFSET_MIN = 15
 
 /**
  * Wall-clock budget for one send-reminders invocation, below the route's
- * `maxDuration = 600` so the handler returns `truncated: true` instead of being
- * killed mid-loop (which loses the result and hides the dropped work).
+ * `maxDuration = 300` (the Hobby-plan ceiling) so the handler returns
+ * `truncated: true` instead of being killed mid-loop, which loses the result and
+ * hides the dropped work. Raise both together if the plan ever allows more.
  */
-export const REMINDER_RUN_BUDGET_MS = 540_000
+export const REMINDER_RUN_BUDGET_MS = 270_000
 
 /**
  * How many billing periods back the Phase 2 chase reaches. Bounds per-household
@@ -37,5 +39,5 @@ export const REMINDER_CHASE_MAX_PRIOR_MONTHS = 3
 
 /** Safety cap per invocation. The time budget above is the real governor. */
 export const REMINDER_BATCH_LIMIT_DEFAULT = 200
-/** Pause between sends; ~1 msg/s, far under Meta's ~80 msg/s ceiling. */
-export const WHATSAPP_SEND_DELAY_MS_DEFAULT = 1000
+/** Pause between sends; ~2 msg/s, far under Meta's ~80 msg/s ceiling. */
+export const WHATSAPP_SEND_DELAY_MS_DEFAULT = 500
