@@ -101,6 +101,25 @@ export function monthYearFromDateString(isoDate: string): { month: number; year:
   return { year: Number(isoDate.slice(0, 4)), month: Number(isoDate.slice(5, 7)) }
 }
 
+/**
+ * Shift an ISO `YYYY-MM-DD` date by whole calendar days, rolling months and years over.
+ *
+ * Pure string→string calendar arithmetic: the input is already a center-timezone date, so
+ * anchoring the math at UTC keeps it drift-free (same reason `lastDayOfMonth` uses UTC) —
+ * this never re-derives a day from a wall-clock instant.
+ */
+export function shiftDateString(isoDate: string, deltaDays: number): string {
+  const { year, month } = monthYearFromDateString(isoDate)
+  const shifted = new Date(
+    Date.UTC(year, month - 1, dayOfMonthFromDateString(isoDate) + deltaDays)
+  )
+  return toDateString(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth() + 1,
+    shifted.getUTCDate()
+  )
+}
+
 export function isPriorBillingPeriod(
   invoiceMonth: number,
   invoiceYear: number,

@@ -21,6 +21,7 @@ import {
   REMINDER_RUN_BUDGET_MS,
   PAYMENT_LINK_RUN_BUDGET_MS,
   REMINDER_CHASE_MAX_PRIOR_MONTHS,
+  REMINDER_FAILED_RETRY_WINDOW_DAYS,
   REMINDER_BATCH_LIMIT_DEFAULT,
   WHATSAPP_SEND_DELAY_MS_DEFAULT,
 } from "@/lib/constants"
@@ -109,6 +110,9 @@ import {
   sortChaseCandidates,
   latestSentAt,
   chaseWindowPeriods,
+  failedRetryWindowStart,
+  isPhase1DueReminder,
+  alreadyContactedOn,
 } from "@/lib/billing/reminder-selection"
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServerClient>>
@@ -1241,11 +1245,13 @@ export const paymentService = {
       // been sent, so a re-run never advances the cadence (selectReminderToSend reads SENT
       // rows for that check, which is why we fetch every status here, not just PENDING/FAILED).
       //
-      // Unlike Phase-1 cron discovery (which limits FAILED rows to today so an ancient
-      // permanently-failing number isn't re-hit automatically), this refetch does NOT
-      // restrict FAILED by date: a past FAILED row is either superseded by a higher due row
-      // or, if it is the highest, retried once here. Automated re-entry is gated by Phase-1;
-      // this path only runs for an invoice the cron or an admin already selected to send.
+      // Unlike Phase-1 cron discovery (which only reaches FAILED rows within
+      // REMINDER_FAILED_RETRY_WINDOW_DAYS, so an ancient permanently-failing number stops
+      // being re-hit automatically), this refetch does NOT bound FAILED by date: a past
+      // FAILED row is either superseded by a higher due row or, if it is the highest,
+      // retried once here. That costs no extra attempts — the invoice is sent at most once
+      // per run either way — because automated re-entry is gated by Phase-1 discovery; this
+      // path only runs for an invoice the cron or an admin already selected to send.
       const { data: rows } = await supabaseAdmin
         .from("payment_reminders")
         .select("*")
@@ -1363,6 +1369,11 @@ export const paymentService = {
     }
   ): Promise<ReminderProcessResult> {
     const today = date ?? todayInCenterTimezone()
+    // Diverges from `today` only when an operator replays a past reminder day via the
+    // `date` override. `sent_at` is stamped from the real clock either way, so the
+    // cross-slot dedupe below has to recognise both days as "already contacted" — without
+    // it, a two-invocation replay re-messages every parent the first invocation reached.
+    const realToday = todayInCenterTimezone()
     const batchLimit =
       options?.batchLimit ??
       Number(process.env.WHATSAPP_BATCH_LIMIT ?? REMINDER_BATCH_LIMIT_DEFAULT)
@@ -1404,22 +1415,47 @@ export const paymentService = {
 
     // Phase 1: every invoice with a due, not-yet-sent reminder. Using `scheduled_date <= today`
     // (not `=== today`) catches reminders whose scheduled day passed before the invoice existed
-    // (mid-month enrollment, manual generation, cuti rebill). FAILED rows are limited to today so a
-    // transient failure retries on the next slot (same-day retry) without endlessly re-hitting an
-    // ancient permanently-failing number. Per invoice we send only the latest due reminder and
-    // supersede the rest, so each invoice gets at most one send per run; the processedInvoiceIds
-    // set then keeps Phase 2 from touching the same invoice.
+    // (mid-month enrollment, manual generation, cuti rebill). FAILED rows get a bounded window
+    // instead: retried for REMINDER_FAILED_RETRY_WINDOW_DAYS, which reaches the next reminder day
+    // and no further. Scoping them to today alone used to strand them — a row that failed during
+    // an outage matched neither branch once the day rolled over, so the parent silently never got
+    // that reminder — while dropping the bound entirely would re-hit a permanently-failing number
+    // on every slot forever. Per invoice we send only the latest due reminder and supersede the
+    // rest, so each invoice still gets at most one send per run (a rediscovered FAILED row that a
+    // newer due reminder has overtaken is cancelled, not re-sent); the processedInvoiceIds set
+    // then keeps Phase 2 from touching the same invoice.
+    const failedRetryFrom = failedRetryWindowStart(
+      today,
+      REMINDER_FAILED_RETRY_WINDOW_DAYS
+    )
+
+    // The `!inner` join drops reminders whose invoice already settled. Those rows can only
+    // ever produce an "Invoice already PAID" skip, but each one still costs a fetch, a
+    // `batchLimit` slot and a `delayMs` pause — so left in, a burst of failures followed by
+    // the parents paying would crowd real sends out of the run. PENDING rows are cancelled
+    // on settlement and so were already filtered in practice; FAILED rows are not, and the
+    // retry window is what would otherwise keep resurfacing them. PENDING/OVERDUE are exactly
+    // the statuses sendPaymentReminderForInvoice will act on, so no real send is lost here.
     const { data: dueReminders, error } = await supabaseAdmin
       .from("payment_reminders")
-      .select("invoice_id")
+      .select("invoice_id, status, scheduled_date, invoices!inner(status)")
+      .in("invoices.status", ["PENDING", "OVERDUE"])
       .or(
-        `and(status.eq.PENDING,scheduled_date.lte.${today}),and(status.eq.FAILED,scheduled_date.eq.${today})`
+        `and(status.eq.PENDING,scheduled_date.lte.${today}),` +
+          `and(status.eq.FAILED,scheduled_date.gte.${failedRetryFrom},scheduled_date.lte.${today})`
       )
 
     if (error) throw Errors.INTERNAL(error.message)
 
+    // Re-check in JS what the `.or()` above already narrows, the same belt-and-braces Phase 2
+    // uses with isOverdueChaseEligible: the rule lives in one tested helper, so a malformed
+    // filter string widens the scan rather than silently changing who gets messaged.
     const dueInvoiceIds = Array.from(
-      new Set((dueReminders ?? []).map((r) => r.invoice_id as string))
+      new Set(
+        (dueReminders ?? [])
+          .filter((r) => isPhase1DueReminder(r, { today, failedRetryFrom }))
+          .map((r) => r.invoice_id as string)
+      )
     )
 
     for (const invoiceId of dueInvoiceIds) {
@@ -1506,6 +1542,12 @@ export const paymentService = {
             lastChasedAt: latestSentAt(inv.payment_reminders ?? []),
           }
         })
+        // Cross-slot dedupe. processedInvoiceIds only covers this invocation, and
+        // ensureOverdueCatchUpReminder recognises "already sent today" only from a row dated
+        // today — so an invoice Phase 1 sent from an older row (a FAILED one inside the retry
+        // window, or a stranded PENDING one) would be chased again in a later slot and the
+        // parent messaged twice. One send per invoice per day, whichever phase makes it.
+        .filter((inv) => !alreadyContactedOn(inv.lastChasedAt, today, realToday))
     )
 
     for (const inv of chaseCandidates) {

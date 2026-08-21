@@ -49,7 +49,7 @@ function inferSlot(): number {
   return REMINDER_SLOT_COUNT
 }
 
-/** Slots 1–9: Phase 1 only. Slot 10: Phase 1 + Phase 2 (overdue chase). */
+/** Slots below REMINDER_PHASE2_START_SLOT: Phase 1 only. That slot and above: + Phase 2. */
 function slotOptions(slot: number): { includeOverdueChase: boolean } {
   return { includeOverdueChase: slot >= REMINDER_PHASE2_START_SLOT }
 }

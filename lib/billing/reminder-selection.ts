@@ -1,4 +1,9 @@
-import { isPriorBillingPeriod, dayOfMonthFromDateString } from "@/lib/utils"
+import {
+  isPriorBillingPeriod,
+  dayOfMonthFromDateString,
+  shiftDateString,
+  todayInCenterTimezone,
+} from "@/lib/utils"
 import { billingPeriodIndex, shiftBillingPeriod } from "@/lib/billing/billing-period"
 import type { PaymentStatus } from "@/features/payments/types"
 
@@ -9,6 +14,51 @@ import type { PaymentStatus } from "@/features/payments/types"
 /** Is `today` (YYYY-MM-DD) one of the configured global reminder days (1/11/21)? */
 export function isReminderDay(today: string, reminderDays: number[]): boolean {
   return reminderDays.includes(dayOfMonthFromDateString(today))
+}
+
+/**
+ * Oldest `scheduled_date` from which a FAILED reminder is still retried on `today`.
+ *
+ * The service turns this into the lower bound of the Phase-1 FAILED branch, the same way
+ * `chaseWindowPeriods` becomes Phase 2's period filter: the DB query narrows the scan and
+ * `isPhase1DueReminder` re-checks the rows that come back, so the SQL and the rule can't
+ * drift apart silently.
+ */
+export function failedRetryWindowStart(today: string, windowDays: number): string {
+  return shiftDateString(today, -windowDays)
+}
+
+/**
+ * Does this reminder row belong in Phase 1's due set — i.e. should the cron pick its
+ * invoice up on `today`?
+ *
+ * The two sendable statuses are deliberately asymmetric:
+ * - PENDING is unbounded below (`scheduled_date <= today`), so a reminder stranded in the
+ *   past by a mid-month enrollment, manual generation or cuti rebill still self-heals.
+ * - FAILED is bounded to `[failedRetryFrom, today]`. Without a lower bound a permanently
+ *   broken number would be re-attempted on every slot forever; without a *window* — the
+ *   old `scheduled_date = today` rule — a row that failed during an outage was dropped for
+ *   good the moment the calendar day rolled over, and the parent silently never heard from
+ *   us. The window is the middle ground: retried on the next reminder day, then abandoned.
+ *
+ * Widening FAILED does not multiply sends. An invoice is sent at most once per run, and
+ * `selectReminderToSend` prefers the highest-numbered due row — so a rediscovered FAILED
+ * row that has been overtaken by a newer due reminder is superseded rather than re-sent.
+ * It only produces a send when nothing newer is waiting, which is exactly the stranded case.
+ *
+ * Dates are compared as ISO `YYYY-MM-DD` strings (lexicographic == chronological), matching
+ * the SQL predicates in the service.
+ */
+export function isPhase1DueReminder(
+  reminder: { status: string; scheduled_date: string },
+  options: { today: string; failedRetryFrom: string }
+): boolean {
+  if (reminder.scheduled_date > options.today) return false
+  if (reminder.status === "PENDING") return true
+  if (reminder.status === "FAILED") {
+    return reminder.scheduled_date >= options.failedRetryFrom
+  }
+  return false
 }
 
 /**
@@ -77,6 +127,37 @@ export function latestSentAt(
     if (latest === null || r.sent_at > latest) latest = r.sent_at
   }
   return latest
+}
+
+/**
+ * Has this invoice already had a reminder go out on `today` (WIB)?
+ *
+ * This is the cross-slot half of Phase 1 ↔ Phase 2 deduplication. `processedInvoiceIds`
+ * only spans a single invocation, so on a reminder day the ten slots need something
+ * durable: Phase 2's `ensureOverdueCatchUpReminder` refuses to write a second row for
+ * today, but it recognises "already sent" only by looking for a SENT row dated exactly
+ * today. An invoice Phase 1 sent from a row dated *earlier* than today therefore looked
+ * uncontacted, and a later slot's chase would insert a fresh catch-up row and message the
+ * parent a second time. Comparing the last successful send instead of the row's schedule
+ * closes that: one message per invoice per day, whichever phase sends it.
+ *
+ * `sent_at` is a UTC instant, so it is converted to a WIB calendar day before comparing —
+ * a send at 02:00 UTC is already the same WIB day as a 09:00 WIB run.
+ *
+ * `realToday` matters only when an operator replays a past reminder day with an explicit
+ * `date`: the run's logical `today` is then the replayed date while `sent_at` is still
+ * stamped from the real clock, so comparing against the logical day alone would report
+ * "never contacted" for a message sent moments earlier and message the parent twice. On the
+ * scheduled path the two are identical and this collapses to a single comparison.
+ */
+export function alreadyContactedOn(
+  lastSentAt: string | null,
+  today: string,
+  realToday: string = today
+): boolean {
+  if (!lastSentAt) return false
+  const sentDay = todayInCenterTimezone(new Date(lastSentAt))
+  return sentDay === today || sentDay === realToday
 }
 
 /**
