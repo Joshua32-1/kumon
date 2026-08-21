@@ -116,3 +116,84 @@ export function parseMetaStatusEvents(payload: unknown): MetaStatusEvent[] {
   }
   return events
 }
+
+/**
+ * Max identifiers per PostgREST filter. Both `select().in()` and `update().in()` put the
+ * list in the URL, so an unbounded batch would blow past gateway URL limits.
+ */
+export const DELIVERY_BATCH_SIZE = 100
+
+export function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/**
+ * Collapse to one event per wamid, keeping the highest-ranked status. A single payload can
+ * carry both `delivered` and `read` for the same message — applying them in arrival order
+ * would cost two writes and, if they arrived out of order, the rank guard would drop the
+ * better one.
+ */
+export function dedupeStatusEvents(events: MetaStatusEvent[]): MetaStatusEvent[] {
+  const best = new Map<string, MetaStatusEvent>()
+  for (const e of events) {
+    const prev = best.get(e.wamid)
+    if (!prev || DELIVERY_STATUS_RANK[e.status] > DELIVERY_STATUS_RANK[prev.status]) {
+      best.set(e.wamid, e)
+    }
+  }
+  return [...best.values()]
+}
+
+export interface DeliveryUpdatePlan {
+  ids: string[]
+  status: MessageDeliveryStatus
+  timestampIso: string
+  errorCode: string | null
+  errorTitle: string | null
+}
+
+/**
+ * Decide which rows move forward, grouped so every row sharing an identical patch updates
+ * in one statement. A bulk read marks hundreds of messages at the same instant, so in
+ * practice this collapses to a handful of groups regardless of batch size.
+ *
+ * Ordering within a group is irrelevant; `ids` is what the caller filters on.
+ */
+export function planDeliveryUpdates(
+  events: MetaStatusEvent[],
+  current: { id: string; wamid: string; status: MessageDeliveryStatus }[],
+  nowIso: string
+): DeliveryUpdatePlan[] {
+  const byWamid = new Map(current.map((r) => [r.wamid, r]))
+  const groups = new Map<string, DeliveryUpdatePlan>()
+
+  for (const e of events) {
+    const row = byWamid.get(e.wamid)
+    if (!row) continue
+    // Forward progress only — never let a late callback downgrade a better state.
+    if (DELIVERY_STATUS_RANK[e.status] <= DELIVERY_STATUS_RANK[row.status]) continue
+
+    const timestampIso = e.timestamp
+      ? new Date(e.timestamp * 1000).toISOString()
+      : nowIso
+    const errorCode = e.status === "FAILED" ? e.errorCode : null
+    const errorTitle = e.status === "FAILED" ? e.errorTitle : null
+
+    const key = `${e.status}|${timestampIso}|${errorCode ?? ""}|${errorTitle ?? ""}`
+    const existing = groups.get(key)
+    if (existing) existing.ids.push(row.id)
+    else groups.set(key, { ids: [row.id], status: e.status, timestampIso, errorCode, errorTitle })
+  }
+
+  return [...groups.values()]
+}
+
+/** Statuses a row may currently hold and still be moved forward to `target`. */
+export function statusesBelow(target: MessageDeliveryStatus): MessageDeliveryStatus[] {
+  const rank = DELIVERY_STATUS_RANK[target]
+  return (Object.keys(DELIVERY_STATUS_RANK) as MessageDeliveryStatus[]).filter(
+    (s) => DELIVERY_STATUS_RANK[s] < rank
+  )
+}

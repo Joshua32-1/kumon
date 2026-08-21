@@ -8,6 +8,10 @@ import { alertCronFailure } from "@/lib/alerts"
 // GET  — subscription handshake (echo hub.challenge when the verify token matches).
 // POST — delivery-status callbacks (sent/delivered/read/failed) → message_events.
 // proxy.ts exempts /api/webhooks from auth; POST is verified by X-Hub-Signature-256.
+//
+// Meta expects a 200 within seconds and abandons a batch it can't get one for, so the
+// statuses are applied in bulk (two round-trip phases) rather than one at a time.
+export const maxDuration = 60
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams
@@ -45,9 +49,7 @@ export async function POST(request: NextRequest) {
   const events = parseMetaStatusEvents(payload)
   let updated = 0
   try {
-    for (const event of events) {
-      if (await paymentService.applyMessageDeliveryEvent(event)) updated++
-    }
+    updated = await paymentService.applyMessageDeliveryEvents(events)
   } catch (err) {
     // Signature already verified — a throw here is a genuine processing failure.
     await alertCronFailure("webhook-meta", err)

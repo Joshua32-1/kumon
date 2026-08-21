@@ -94,6 +94,11 @@ import {
 import { findMissingInvoices, type MissingInvoice } from "@/lib/billing/watchdog"
 import {
   DELIVERY_STATUS_RANK,
+  dedupeStatusEvents,
+  planDeliveryUpdates,
+  statusesBelow,
+  chunk,
+  DELIVERY_BATCH_SIZE,
   type MetaStatusEvent,
 } from "@/lib/messaging/delivery"
 import type { Database, MessageEventType, MessageDeliveryStatus } from "@/types/database"
@@ -1874,45 +1879,75 @@ export const paymentService = {
   },
 
   /**
-   * Apply a Meta delivery-status callback to its message_events row. Forward-progress
-   * only (per DELIVERY_STATUS_RANK: SENT < FAILED < DELIVERED < READ) so out-of-order
-   * callbacks never downgrade — in particular a late `failed` can't overwrite a
-   * delivered/read message. Returns true when a row was advanced; unknown wamid → false.
+   * Apply a webhook payload's delivery statuses in bulk. Forward-progress only (per
+   * DELIVERY_STATUS_RANK: SENT < FAILED < DELIVERED < READ) so out-of-order callbacks never
+   * downgrade — in particular a late `failed` can't overwrite a delivered/read message.
+   * Returns the number of rows advanced; unknown wamids are ignored.
+   *
+   * The previous per-event version did a SELECT then an UPDATE for every status, awaited
+   * one at a time. At the ~250 ms round trip this database actually costs, a bulk read —
+   * one parent opening a chat and marking hundreds of messages read at once — took minutes,
+   * so Meta timed out waiting for our 200 and abandoned the batch. Those read receipts are
+   * never resent, which is how whole contiguous blocks of messages stayed stuck at
+   * DELIVERED despite having been read.
+   *
+   * Now it is two round-trip phases regardless of batch size: chunked lookups in parallel,
+   * then one UPDATE per distinct patch (a bulk read collapses to a handful).
    */
-  async applyMessageDeliveryEvent(event: MetaStatusEvent): Promise<boolean> {
-    const { data: row } = await supabaseAdmin
-      .from("message_events")
-      .select("id, status")
-      .eq("wamid", event.wamid)
-      .maybeSingle()
-    if (!row) return false
+  async applyMessageDeliveryEvents(events: MetaStatusEvent[]): Promise<number> {
+    const deduped = dedupeStatusEvents(events)
+    if (deduped.length === 0) return 0
 
-    const currentRank = DELIVERY_STATUS_RANK[row.status as MessageDeliveryStatus]
-    if (DELIVERY_STATUS_RANK[event.status] <= currentRank) return false
-
-    const ts = event.timestamp
-      ? new Date(event.timestamp * 1000).toISOString()
-      : new Date().toISOString()
-    const patch: Database["public"]["Tables"]["message_events"]["Update"] = {
-      status: event.status,
-    }
-    if (event.status === "DELIVERED") patch.delivered_at = ts
-    else if (event.status === "READ") patch.read_at = ts
-    else if (event.status === "FAILED") {
-      patch.failed_at = ts
-      patch.error_code = event.errorCode
-      patch.error_title = event.errorTitle
+    const lookups = await Promise.all(
+      chunk(deduped.map((e) => e.wamid), DELIVERY_BATCH_SIZE).map((wamids) =>
+        supabaseAdmin.from("message_events").select("id, wamid, status").in("wamid", wamids)
+      )
+    )
+    const current: { id: string; wamid: string; status: MessageDeliveryStatus }[] = []
+    for (const res of lookups) {
+      if (res.error) throw Errors.INTERNAL(res.error.message)
+      current.push(
+        ...((res.data ?? []) as { id: string; wamid: string; status: MessageDeliveryStatus }[])
+      )
     }
 
-    const { error } = await supabaseAdmin
-      .from("message_events")
-      .update(patch)
-      .eq("id", row.id)
-    if (error) {
-      console.error("Failed to apply delivery event:", error.message)
-      return false
-    }
-    return true
+    const plans = planDeliveryUpdates(deduped, current, new Date().toISOString())
+    if (plans.length === 0) return 0
+
+    const writes = plans.flatMap((plan) =>
+      chunk(plan.ids, DELIVERY_BATCH_SIZE).map((ids) => ({ plan, ids }))
+    )
+
+    const counts = await Promise.all(
+      writes.map(async ({ plan, ids }) => {
+        const patch: Database["public"]["Tables"]["message_events"]["Update"] = {
+          status: plan.status,
+        }
+        if (plan.status === "DELIVERED") patch.delivered_at = plan.timestampIso
+        else if (plan.status === "READ") patch.read_at = plan.timestampIso
+        else if (plan.status === "FAILED") {
+          patch.failed_at = plan.timestampIso
+          patch.error_code = plan.errorCode
+          patch.error_title = plan.errorTitle
+        }
+
+        // The rank guard also lives in the UPDATE filter, so a concurrent webhook that
+        // already advanced a row further cannot be walked backwards by this write.
+        const { data, error } = await supabaseAdmin
+          .from("message_events")
+          .update(patch)
+          .in("id", ids)
+          .in("status", statusesBelow(plan.status))
+          .select("id")
+        if (error) {
+          console.error("Failed to apply delivery events:", error.message)
+          return 0
+        }
+        return data?.length ?? 0
+      })
+    )
+
+    return counts.reduce((a, b) => a + b, 0)
   },
 
   async handleMidtransWebhook(payload: MidtransWebhookPayload): Promise<MidtransWebhookResult> {
