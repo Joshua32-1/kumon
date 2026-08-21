@@ -10,8 +10,15 @@ export const BILLABLE_STUDENT_STATUSES = ["ACTIVE", "TEMPORARY_LEAVE"] as const
  * REMINDER_CHASE_MAX_PRIOR_MONTHS of arrears).
  *
  * Both phases now cost the same per send; Phase 2 used to run ~0.9s slower because it
- * looked a contact up per invoice. The margin over what's owed is thin, so treat a
- * persistent `truncated: true` as the signal to revisit these numbers — the next lever
+ * looked a contact up per invoice. On the standard cadence a retried FAILED reminder does not
+ * widen the day's total: an invoice contacted by Phase 1 is skipped by every later slot's
+ * chase (`alreadyContactedOn`), so the retry replaces that invoice's arrears send rather
+ * than adding to it — it just lands earlier in the day. The exception is an invoice that
+ * aged past REMINDER_CHASE_MAX_PRIOR_MONTHS while a catch-up row was left FAILED: Phase 1
+ * discovery has no period bound, so it gets one send the chase would no longer make —
+ * self-limiting (the row ages out after a single reminder day), but it makes the day's
+ * total "at most what's owed" rather than exactly. The margin over what's owed is thin, so
+ * treat a persistent `truncated: true` as the signal to revisit these numbers — the next lever
  * is a plan that allows a maxDuration above the 300s Hobby ceiling.
  */
 export const REMINDER_SLOT_COUNT = 10
@@ -54,6 +61,23 @@ export const PAYMENT_LINK_RUN_BUDGET_MS = 240_000
  * message volume as unpaid invoices accumulate; older debt moves to manual follow-up.
  */
 export const REMINDER_CHASE_MAX_PRIOR_MONTHS = 3
+
+/**
+ * How far back Phase 1 keeps retrying a `FAILED` reminder, in calendar days.
+ *
+ * `PENDING` rows are discovered with `scheduled_date <= today` and so self-heal on any
+ * later run. `FAILED` rows need a bound, or a permanently-broken number would be re-hit
+ * on every slot forever — but the bound used to be "today only", which meant a row that
+ * failed during an outage was never retried at all once the day rolled over.
+ *
+ * 11 days is derived from the cadence, not picked: `send-reminders` only runs on the
+ * reminder days (1/11/21), and the widest gap between two of them is the 21st → the 1st
+ * of a 31-day month = 11 days. So the window is exactly "your own day, plus the next
+ * reminder day" — long enough that an outage on one reminder day is retried on the
+ * following one, short enough that it can never reach a second. Changing the reminder
+ * days (`system_config.reminder_days`) or the cron schedule means revisiting this.
+ */
+export const REMINDER_FAILED_RETRY_WINDOW_DAYS = 11
 
 /**
  * Safety cap per invocation, shared by the reminder cron and the admin bulk send —

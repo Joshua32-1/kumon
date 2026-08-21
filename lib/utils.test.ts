@@ -8,6 +8,7 @@ import {
   monthYearFromDateString,
   isPriorBillingPeriod,
   isSameBillingPeriod,
+  shiftDateString,
   escapeHtml,
 } from "@/lib/utils"
 
@@ -132,5 +133,45 @@ describe("escapeHtml", () => {
 
   it("leaves plain text unchanged", () => {
     expect(escapeHtml("Tagihan sudah lunas")).toBe("Tagihan sudah lunas")
+  })
+})
+
+// Calendar-day arithmetic on an already-WIB date string. The reminder retry window is
+// measured with this, so an off-by-one or a DST/tz wobble would silently change which
+// FAILED reminders still get retried.
+describe("shiftDateString", () => {
+  it("moves forward and backward inside a month", () => {
+    expect(shiftDateString("2026-06-15", 3)).toBe("2026-06-18")
+    expect(shiftDateString("2026-06-15", -3)).toBe("2026-06-12")
+    expect(shiftDateString("2026-06-15", 0)).toBe("2026-06-15")
+  })
+
+  it("rolls back across a month boundary", () => {
+    // The reminder-window case: the 1st looking back 11 days lands on the prior 21st.
+    expect(shiftDateString("2026-07-01", -11)).toBe("2026-06-20")
+    expect(shiftDateString("2026-08-01", -11)).toBe("2026-07-21")
+  })
+
+  it("rolls across a year boundary in both directions", () => {
+    expect(shiftDateString("2027-01-05", -10)).toBe("2026-12-26")
+    expect(shiftDateString("2026-12-28", 10)).toBe("2027-01-07")
+  })
+
+  it("handles short and leap Februaries", () => {
+    expect(shiftDateString("2026-03-01", -1)).toBe("2026-02-28")
+    expect(shiftDateString("2028-03-01", -1)).toBe("2028-02-29")
+  })
+
+  it("zero-pads single-digit months and days", () => {
+    expect(shiftDateString("2026-01-10", -1)).toBe("2026-01-09")
+    expect(shiftDateString("2026-09-30", 1)).toBe("2026-10-01")
+  })
+
+  it("does not drift when applied repeatedly across a DST-changing tz", () => {
+    // WIB has no DST, but the helper must not depend on the host's zone either.
+    let d = "2026-03-01"
+    for (let i = 0; i < 400; i++) d = shiftDateString(d, 1)
+    expect(d).toBe(shiftDateString("2026-03-01", 400))
+    expect(d).toBe("2027-04-05")
   })
 })

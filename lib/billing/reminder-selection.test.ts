@@ -6,8 +6,14 @@ import {
   sortChaseCandidates,
   latestSentAt,
   chaseWindowPeriods,
+  failedRetryWindowStart,
+  isPhase1DueReminder,
+  alreadyContactedOn,
 } from "@/lib/billing/reminder-selection"
-import { DEFAULT_REMINDER_DAYS } from "@/lib/constants"
+import {
+  DEFAULT_REMINDER_DAYS,
+  REMINDER_FAILED_RETRY_WINDOW_DAYS,
+} from "@/lib/constants"
 
 describe("isReminderDay", () => {
   it("is true on configured reminder days and false otherwise", () => {
@@ -278,5 +284,371 @@ describe("sortChaseCandidates", () => {
     )
     // "c" was starved by the old physical-order code; now it leads.
     expect(sortChaseCandidates(state).map((c) => c.id)).toEqual(["c", "a", "b"])
+  })
+})
+
+
+describe("failedRetryWindowStart", () => {
+  it("returns the date `windowDays` before today", () => {
+    expect(failedRetryWindowStart("2026-06-21", 11)).toBe("2026-06-10")
+  })
+
+  it("reaches back to the previous reminder day from each reminder day", () => {
+    // The window exists to survive the gap between cron runs, which only happen on
+    // 1/11/21 — so from each reminder day it must still cover the one before it.
+    const window = REMINDER_FAILED_RETRY_WINDOW_DAYS
+    expect(failedRetryWindowStart("2026-06-11", window) <= "2026-06-01").toBe(true)
+    expect(failedRetryWindowStart("2026-06-21", window) <= "2026-06-11").toBe(true)
+    // 21st → 1st of the next month is the widest gap (11 days in a 31-day month).
+    expect(failedRetryWindowStart("2026-08-01", window) <= "2026-07-21").toBe(true)
+    // …and February's short gap is covered by the same window.
+    expect(failedRetryWindowStart("2026-03-01", window) <= "2026-02-21").toBe(true)
+  })
+
+  it("does not reach back two reminder days", () => {
+    // The guard half of the bound: a FAILED row gets one extra reminder day, never two.
+    const window = REMINDER_FAILED_RETRY_WINDOW_DAYS
+    expect(failedRetryWindowStart("2026-06-21", window) > "2026-06-01").toBe(true)
+    expect(failedRetryWindowStart("2026-08-01", window) > "2026-07-11").toBe(true)
+  })
+})
+
+describe("isPhase1DueReminder", () => {
+  const today = "2026-06-21"
+  const failedRetryFrom = failedRetryWindowStart(today, REMINDER_FAILED_RETRY_WINDOW_DAYS)
+  const opts = { today, failedRetryFrom }
+
+  it("picks up a PENDING row however long it has been stranded", () => {
+    // No lower bound for PENDING: mid-month enrollment / manual generation / cuti rebill
+    // all leave rows dated before the invoice existed, and they must still self-heal.
+    expect(isPhase1DueReminder({ status: "PENDING", scheduled_date: today }, opts)).toBe(true)
+    expect(isPhase1DueReminder({ status: "PENDING", scheduled_date: "2026-06-01" }, opts)).toBe(true)
+    expect(isPhase1DueReminder({ status: "PENDING", scheduled_date: "2025-01-01" }, opts)).toBe(true)
+  })
+
+  it("skips rows not yet due", () => {
+    expect(isPhase1DueReminder({ status: "PENDING", scheduled_date: "2026-06-22" }, opts)).toBe(false)
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: "2026-06-22" }, opts)).toBe(false)
+  })
+
+  it("still retries a FAILED row on the same day (the pre-existing behaviour)", () => {
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: today }, opts)).toBe(true)
+  })
+
+  it("retries a FAILED row after the calendar day rolls over — the durability fix", () => {
+    // Before this, a row that failed mid-batch matched neither branch from the next day
+    // on, so the parent silently never received that reminder.
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: "2026-06-20" }, opts)).toBe(true)
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: "2026-06-11" }, opts)).toBe(true)
+  })
+
+  it("treats the window start as inclusive and the day before it as out", () => {
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: failedRetryFrom }, opts)).toBe(true)
+    const dayBefore = failedRetryWindowStart(today, REMINDER_FAILED_RETRY_WINDOW_DAYS + 1)
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: dayBefore }, opts)).toBe(false)
+  })
+
+  it("stops retrying an ancient FAILED row — the guard the window keeps", () => {
+    // A permanently-failing number must not be re-hit on every slot forever.
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: "2026-01-11" }, opts)).toBe(false)
+    expect(isPhase1DueReminder({ status: "FAILED", scheduled_date: "2025-06-21" }, opts)).toBe(false)
+  })
+
+  it("ignores terminal statuses entirely", () => {
+    for (const status of ["SENT", "CANCELLED"]) {
+      expect(isPhase1DueReminder({ status, scheduled_date: today }, opts)).toBe(false)
+      expect(isPhase1DueReminder({ status, scheduled_date: "2026-06-20" }, opts)).toBe(false)
+    }
+  })
+
+  it("carries an outage on one reminder day to the next one, then lets it go", () => {
+    // Reminder 3 fails on the 21st — the last slot of the last reminder day of the month,
+    // with the invoice still PENDING until its end-of-month due date, so nothing else
+    // would have picked it up.
+    const failed = { status: "FAILED", scheduled_date: "2026-06-21" }
+    const nextReminderDay = { today: "2026-07-01", failedRetryFrom: failedRetryWindowStart("2026-07-01", REMINDER_FAILED_RETRY_WINDOW_DAYS) }
+    expect(isPhase1DueReminder(failed, nextReminderDay)).toBe(true)
+
+    const dayAfterThat = { today: "2026-07-11", failedRetryFrom: failedRetryWindowStart("2026-07-11", REMINDER_FAILED_RETRY_WINDOW_DAYS) }
+    expect(isPhase1DueReminder(failed, dayAfterThat)).toBe(false)
+  })
+
+  it("does not turn a rediscovered FAILED row into an extra send", () => {
+    // Discovery widening only matters when nothing newer is waiting. Here reminder 1
+    // failed on the 1st and reminder 2 comes due on the 11th: the invoice is picked up
+    // either way, and selectReminderToSend sends only reminder 2, superseding the FAILED
+    // row rather than re-sending it.
+    const eleventh = "2026-06-11"
+    const reminders = [
+      { reminder_number: 1, id: "a", scheduled_date: "2026-06-01", status: "FAILED" },
+      { reminder_number: 2, id: "b", scheduled_date: eleventh, status: "PENDING" },
+      { reminder_number: 3, id: "c", scheduled_date: "2026-06-21", status: "PENDING" },
+    ]
+    const windowStart = failedRetryWindowStart(eleventh, REMINDER_FAILED_RETRY_WINDOW_DAYS)
+    expect(
+      isPhase1DueReminder(reminders[0], { today: eleventh, failedRetryFrom: windowStart })
+    ).toBe(true)
+
+    const { target, supersede } = selectReminderToSend(reminders, {
+      today: eleventh,
+      ignoreSchedule: false,
+    })
+    expect(target?.id).toBe("b")
+    expect(supersede).toBe(true)
+  })
+
+  it("sends the stranded FAILED row when it is the newest one due", () => {
+    // Same invoice a month on: 1 and 2 went out, 3 failed on the 21st and is now the
+    // highest due sendable row, so the retry actually reaches the parent.
+    const reminders = [
+      { reminder_number: 1, id: "a", scheduled_date: "2026-06-01", status: "SENT" },
+      { reminder_number: 2, id: "b", scheduled_date: "2026-06-11", status: "SENT" },
+      { reminder_number: 3, id: "c", scheduled_date: "2026-06-21", status: "FAILED" },
+    ]
+    const { target, supersede } = selectReminderToSend(reminders, {
+      today: "2026-07-01",
+      ignoreSchedule: false,
+    })
+    expect(target?.id).toBe("c")
+    expect(supersede).toBe(true)
+  })
+})
+
+describe("alreadyContactedOn", () => {
+  it("is false for an invoice that has never been contacted", () => {
+    expect(alreadyContactedOn(null, "2026-07-01")).toBe(false)
+  })
+
+  it("is true for a send made earlier the same WIB day", () => {
+    // 02:00 UTC on 1 Jul is 09:00 WIB the same day — the first reminder slot.
+    expect(alreadyContactedOn("2026-07-01T02:00:00Z", "2026-07-01")).toBe(true)
+  })
+
+  it("is false for a send on a previous day", () => {
+    expect(alreadyContactedOn("2026-06-21T02:00:00Z", "2026-07-01")).toBe(false)
+  })
+
+  it("uses the WIB calendar day, not the UTC one", () => {
+    // 17:30 UTC on 30 Jun is already 00:30 on 1 Jul in Jakarta (+7).
+    expect(alreadyContactedOn("2026-06-30T17:30:00Z", "2026-07-01")).toBe(true)
+    // …and 16:30 UTC is still 23:30 on 30 Jun there.
+    expect(alreadyContactedOn("2026-06-30T16:30:00Z", "2026-07-01")).toBe(false)
+  })
+
+  it("stops the double message when Phase 1 sent from an older row — the dedupe fix", () => {
+    // The outage case end to end. An arrears invoice's reminder failed on 21 Jun. On 1 Jul
+    // slot 1, Phase 1 rediscovers it inside the retry window and sends from that 06-21 row.
+    const failedOn21st = { status: "FAILED", scheduled_date: "2026-06-21" }
+    const july1 = "2026-07-01"
+    expect(
+      isPhase1DueReminder(failedOn21st, {
+        today: july1,
+        failedRetryFrom: failedRetryWindowStart(july1, REMINDER_FAILED_RETRY_WINDOW_DAYS),
+      })
+    ).toBe(true)
+
+    // That send stamps sent_at, but the row stays dated 06-21 — so Phase 2's
+    // "is there a SENT row dated today?" check would miss it and chase the invoice again
+    // in slot 3. The last-send check is what sees it.
+    const afterPhase1 = latestSentAt([
+      { sent_at: "2026-07-01T02:05:00Z", status: "SENT" },
+    ])
+    expect(alreadyContactedOn(afterPhase1, july1)).toBe(true)
+  })
+
+  it("still allows the chase when the last send was on an earlier reminder day", () => {
+    const lastMonth = latestSentAt([
+      { sent_at: "2026-06-11T02:00:00Z", status: "SENT" },
+      { sent_at: "2026-06-21T02:00:00Z", status: "SENT" },
+    ])
+    expect(alreadyContactedOn(lastMonth, "2026-07-01")).toBe(false)
+  })
+
+  it("recognises a send made on the real day when replaying a past date", () => {
+    // Ops replay: the run's logical `today` is the replayed reminder day, but sent_at is
+    // stamped from the real clock. Comparing only against the logical day would report
+    // "never contacted" for a message sent moments ago, and the replay's second
+    // invocation would message the parent again.
+    const sentJustNow = "2026-08-21T02:10:00Z"
+    expect(alreadyContactedOn(sentJustNow, "2026-06-21")).toBe(false)
+    expect(alreadyContactedOn(sentJustNow, "2026-06-21", "2026-08-21")).toBe(true)
+  })
+
+  it("still chases on a replay when the last send really was long ago", () => {
+    expect(alreadyContactedOn("2026-06-11T02:00:00Z", "2026-06-21", "2026-08-21")).toBe(false)
+  })
+
+  it("collapses to one comparison on the scheduled path", () => {
+    // realToday defaults to today, so the normal cron path is unaffected.
+    expect(alreadyContactedOn("2026-07-01T02:00:00Z", "2026-07-01")).toBe(
+      alreadyContactedOn("2026-07-01T02:00:00Z", "2026-07-01", "2026-07-01")
+    )
+  })
+
+  it("does not block a same-day retry after a failed chase", () => {
+    // A catch-up row that FAILED has no sent_at, so latestSentAt stays null and the next
+    // slot may retry it — the same-day retry behaviour must survive the dedupe.
+    const onlyFailed = latestSentAt([{ sent_at: null, status: "FAILED" }])
+    expect(alreadyContactedOn(onlyFailed, "2026-07-01")).toBe(false)
+  })
+})
+
+// The invariant that broke when the FAILED window was widened: one message per invoice
+// per day, across ALL ten slots. The unit tests above cover each helper in isolation, but
+// the duplicate lived in the seam between them — Phase 1 sending from a row dated earlier
+// than today, then Phase 2 not recognising that send. This models the two phases over a
+// full reminder day, mirroring ensureOverdueCatchUpReminder's real row bookkeeping.
+describe("one message per invoice per day (Phase 1 + Phase 2 over ten slots)", () => {
+  type Row = {
+    reminder_number: number
+    scheduled_date: string
+    status: string
+    sent_at: string | null
+  }
+
+  /** Returns how many messages the invoice would receive across the day. */
+  function runDay(options: {
+    today: string
+    rows: Row[]
+    chaseEligible: boolean
+    /** Slot numbers on which the WhatsApp send fails. */
+    failOnSlots?: number[]
+  }): number {
+    const { today, chaseEligible, failOnSlots = [] } = options
+    const rows = options.rows.map((r) => ({ ...r }))
+    const failedRetryFrom = failedRetryWindowStart(today, REMINDER_FAILED_RETRY_WINDOW_DAYS)
+    let messages = 0
+
+    const send = (row: Row, slot: number) => {
+      messages++
+      if (failOnSlots.includes(slot)) {
+        row.status = "FAILED"
+      } else {
+        row.status = "SENT"
+        // Stamped at send time, NOT at the row's scheduled_date — the detail the
+        // scheduled_date-based dedupe missed.
+        row.sent_at = `${today}T02:00:00Z`
+      }
+    }
+
+    for (let slot = 1; slot <= 10; slot++) {
+      const processed = new Set<number>()
+
+      // ── Phase 1: discovery, then latest-due selection ──
+      const discovered = rows.some((r) => isPhase1DueReminder(r, { today, failedRetryFrom }))
+      if (discovered) {
+        const { target } = selectReminderToSend(rows, { today, ignoreSchedule: false })
+        if (target) {
+          processed.add(1)
+          send(target as Row, slot)
+        }
+      }
+
+      // ── Phase 2: overdue chase, slots 3+ ──
+      if (slot < 3 || !chaseEligible || processed.has(1)) continue
+      if (alreadyContactedOn(latestSentAt(rows), today)) continue
+
+      // ensureOverdueCatchUpReminder: reuse today's row, or write a new one.
+      const todayRow = [...rows]
+        .filter((r) => r.scheduled_date === today)
+        .sort((a, b) => b.reminder_number - a.reminder_number)[0]
+      if (todayRow?.status === "SENT") continue
+      if (todayRow && (todayRow.status === "PENDING" || todayRow.status === "FAILED")) {
+        send(todayRow, slot)
+        continue
+      }
+      const fresh: Row = {
+        reminder_number: Math.max(...rows.map((r) => r.reminder_number)) + 1,
+        scheduled_date: today,
+        status: "PENDING",
+        sent_at: null,
+      }
+      rows.push(fresh)
+      send(fresh, slot)
+    }
+
+    return messages
+  }
+
+  it("sends exactly once when Phase 1 retries a FAILED row dated an earlier day", () => {
+    // The regression. An arrears invoice whose 21 Jun send failed, picked up on 1 Jul:
+    // Phase 1 sends from the 06-21 row, and every later slot's chase must stand down.
+    expect(
+      runDay({
+        today: "2026-07-01",
+        chaseEligible: true,
+        rows: [
+          { reminder_number: 1, scheduled_date: "2026-06-01", status: "SENT", sent_at: "2026-06-01T02:00:00Z" },
+          { reminder_number: 2, scheduled_date: "2026-06-11", status: "SENT", sent_at: "2026-06-11T02:00:00Z" },
+          { reminder_number: 3, scheduled_date: "2026-06-21", status: "FAILED", sent_at: null },
+        ],
+      })
+    ).toBe(1)
+  })
+
+  it("sends exactly once for the latent stranded-PENDING variant", () => {
+    // Same seam, reachable before this change whenever a cron slot was missed.
+    expect(
+      runDay({
+        today: "2026-07-01",
+        chaseEligible: true,
+        rows: [
+          { reminder_number: 1, scheduled_date: "2026-06-21", status: "PENDING", sent_at: null },
+        ],
+      })
+    ).toBe(1)
+  })
+
+  it("sends exactly once on a plain chase with no reminder rows due", () => {
+    expect(
+      runDay({
+        today: "2026-07-01",
+        chaseEligible: true,
+        rows: [
+          { reminder_number: 1, scheduled_date: "2026-06-01", status: "SENT", sent_at: "2026-06-01T02:00:00Z" },
+        ],
+      })
+    ).toBe(1)
+  })
+
+  it("keeps retrying within the day when the send itself fails", () => {
+    // The guard must not suppress same-day retries: a FAILED row has no sent_at, so
+    // alreadyContactedOn stays false and later slots try again.
+    const messages = runDay({
+      today: "2026-07-01",
+      chaseEligible: true,
+      failOnSlots: [1, 2, 3, 4],
+      rows: [
+        { reminder_number: 1, scheduled_date: "2026-06-21", status: "FAILED", sent_at: null },
+      ],
+    })
+    expect(messages).toBeGreaterThan(1)
+  })
+
+  it("settles to exactly one message once a retry finally succeeds", () => {
+    // Fails on slots 1–2, succeeds on slot 3, then silence for the remaining seven.
+    const messages = runDay({
+      today: "2026-07-01",
+      chaseEligible: true,
+      failOnSlots: [1, 2],
+      rows: [
+        { reminder_number: 1, scheduled_date: "2026-06-21", status: "FAILED", sent_at: null },
+      ],
+    })
+    expect(messages).toBe(3)
+  })
+
+  it("sends exactly once for a normal current-month reminder day", () => {
+    expect(
+      runDay({
+        today: "2026-07-01",
+        chaseEligible: false,
+        rows: [
+          { reminder_number: 1, scheduled_date: "2026-07-01", status: "PENDING", sent_at: null },
+          { reminder_number: 2, scheduled_date: "2026-07-11", status: "PENDING", sent_at: null },
+          { reminder_number: 3, scheduled_date: "2026-07-21", status: "PENDING", sent_at: null },
+        ],
+      })
+    ).toBe(1)
   })
 })
