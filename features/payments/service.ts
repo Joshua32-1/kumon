@@ -19,6 +19,7 @@ import {
   DEFAULT_REMINDER_DAYS,
   BILLABLE_STUDENT_STATUSES,
   REMINDER_RUN_BUDGET_MS,
+  PAYMENT_LINK_RUN_BUDGET_MS,
   REMINDER_CHASE_MAX_PRIOR_MONTHS,
   REMINDER_BATCH_LIMIT_DEFAULT,
   WHATSAPP_SEND_DELAY_MS_DEFAULT,
@@ -1622,6 +1623,21 @@ export const paymentService = {
   /**
    * Manually send payment links via WhatsApp for all eligible invoices in a period.
    * Reuses the same per-invoice logic as the reminder cron (`sendPaymentReminderForInvoice`).
+   *
+   * Stops at whichever comes first: `batchLimit` sends or PAYMENT_LINK_RUN_BUDGET_MS of
+   * wall clock — the same governance as the cron slot, and for the same reason. A send
+   * costs `delayMs` plus ~2.2s of Meta API + DB writes, so a full period outruns the 300s
+   * `maxDuration` carried by the /payments segment (its layout.tsx holds the config,
+   * since the page itself is a client component and cannot export route config).
+   * Without the budget the platform kills the loop mid-send and the result — counts and
+   * `truncated` alike — is discarded, leaving the admin a failed request and no idea how
+   * many messages actually went out. Stopping early instead returns those counts, and the
+   * dialog tells the admin to run it again for the remainder.
+   *
+   * The budget is tighter than the cron's because this path spends more after the loop
+   * (revalidate + RSC re-render) — see the constant. It assumes the caller runs under the
+   * /payments segment; a caller on some other route gets the platform default while this
+   * still spends 240s, so keep the bulk-send UI on that page.
    */
   async sendPaymentLinksForPeriod(
     month: number,
@@ -1629,10 +1645,16 @@ export const paymentService = {
     options?: { batchLimit?: number; delayMs?: number }
   ): Promise<SendPaymentLinksResult> {
     const batchLimit =
-      options?.batchLimit ?? Number(process.env.WHATSAPP_BATCH_LIMIT ?? 100)
+      options?.batchLimit ??
+      Number(process.env.WHATSAPP_BATCH_LIMIT ?? REMINDER_BATCH_LIMIT_DEFAULT)
     const delayMs =
       options?.delayMs ??
       Number(process.env.WHATSAPP_SEND_DELAY_MS ?? WHATSAPP_SEND_DELAY_MS_DEFAULT)
+
+    // Elapsed wall clock only — no calendar math, so this is deliberately not a WIB helper.
+    // Started before the candidate query so the budget covers the whole invocation.
+    const startedAt = Date.now()
+    const outOfTime = () => Date.now() - startedAt >= PAYMENT_LINK_RUN_BUDGET_MS
 
     const { candidates } = await paymentService.listPaymentLinkSendCandidates(
       month,
@@ -1663,7 +1685,7 @@ export const paymentService = {
     }
 
     for (const candidate of candidates) {
-      if (result.processed >= batchLimit) {
+      if (result.processed >= batchLimit || outOfTime()) {
         result.truncated = true
         break
       }
@@ -1674,7 +1696,13 @@ export const paymentService = {
         { ignoreSchedule: true, initiatedBy: "admin" }
       )
       recordOutcome(outcome)
-      if (result.processed < batchLimit && result.processed < candidates.length) {
+      // Skip the pause when the next iteration is going to stop anyway — the loop's last
+      // sleep is pure overshoot, and on the budget path it is margin we cannot spare.
+      if (
+        result.processed < batchLimit &&
+        result.processed < candidates.length &&
+        !outOfTime()
+      ) {
         await sleep(delayMs)
       }
     }
