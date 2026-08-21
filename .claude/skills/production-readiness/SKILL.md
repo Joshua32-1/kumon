@@ -35,7 +35,7 @@ Also confirm the Midtrans dashboard webhook/notification URL points at `{NEXT_PU
 
 ## 3. Platform
 
-- **Vercel Pro required**: `send-reminders` exports `maxDuration: 300`, `generate-invoices`/`reconcile-payments` 120 — Hobby caps at ~10s and the workloads time out. Alternative: external cron (GitHub Actions, cron-job.org) hitting the GET endpoints with the bearer secret.
+- **`maxDuration` vs the plan ceiling**: `send-reminders` exports 300, `generate-invoices`/`reconcile-payments` 120, and the `/payments` segment exports 300 via [app/(dashboard)/payments/layout.tsx](../../../app/\(dashboard\)/payments/layout.tsx) (it carries the admin bulk WhatsApp send; the page is a client component and cannot export route config itself). **300 is the Hobby ceiling** — a deploy asking for more fails at the `patchBuild` step with `invalid_max_duration`, *after* the build log reports success and ends at "Deploying outputs…". Read the deployment's `errorMessage`, not the build log. (`features/payments/service.send-budget.test.ts` asserts the `/payments` value stays ≤ 300, so this fails in CI first.) Both send loops stop themselves under that ceiling (`REMINDER_RUN_BUDGET_MS` / `PAYMENT_LINK_RUN_BUDGET_MS`) and report `truncated: true`; a *persistently* truncated run means the ceiling is the bottleneck — raise it with a paid plan, or move the work to an external cron (GitHub Actions, cron-job.org) hitting the GET endpoints with the bearer secret.
 - `vercel.json` cron schedules are **UTC** (WIB − 7h) — verify any edits against the intended WIB times in API.md.
 
 ## 4. Security

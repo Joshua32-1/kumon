@@ -48,8 +48,8 @@ Fill in all values:
 | `META_TEMPLATE_REMINDER_LANGUAGE` | Reminder template language code (e.g. `id`) |
 | `META_TEMPLATE_CONFIRMATION_NAME` | Approved confirmation template name (e.g. `kumon_payment_confirmation`) |
 | `META_TEMPLATE_CONFIRMATION_LANGUAGE` | Confirmation template language code (e.g. `id`) |
-| `WHATSAPP_SEND_DELAY_MS` | Optional — ms between WhatsApp sends in cron (default `2000`) |
-| `WHATSAPP_BATCH_LIMIT` | Optional — max sends per reminder slot (default `100`) |
+| `WHATSAPP_SEND_DELAY_MS` | Optional — ms between WhatsApp sends (default `500`) |
+| `WHATSAPP_BATCH_LIMIT` | Optional — safety cap on sends per run (default `200`) |
 | `WEBHOOK_SECRET` | Secret for manual/local cron calls (`x-api-key` header on POST) |
 | `CRON_SECRET` | **Required on Vercel** — Vercel Cron sends `Authorization: Bearer {CRON_SECRET}` on GET |
 | `RESEND_API_KEY` | Resend → API Keys. Enables admin failure-alert emails (watchdog + singleton cron failures) |
@@ -81,7 +81,7 @@ Open [http://localhost:3000](http://localhost:3000) and log in with the admin us
 
 ### 4. Tests
 
-Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, reporting aggregations incl. collection rate, arrears aging, enrollment/churn, subject mix & CSV export, cron auth) and `features/` (billing summary, validations); shared fixtures live in `lib/test/factories.ts`.
+Unit tests run with [Vitest](https://vitest.dev). Tests live next to the code they cover as `*.test.ts` files, covering the pure helpers under `lib/` (billing logic incl. generation eligibility & reminder selection, leave-review/streak alerts, student leave-status & bulk-leave helpers, timezone, Midtrans signature/settlement/expiry/errors, pay-page & pay-link, WhatsApp message & Meta template builders, reporting aggregations incl. collection rate, arrears aging, enrollment/churn, subject mix & CSV export, cron auth) and `features/` (billing summary, validations, generation scale, bulk-send run budget); shared fixtures live in `lib/test/factories.ts`.
 
 ```bash
 npm test            # run once
@@ -135,20 +135,23 @@ For centers with up to ~1000 students, the send-reminders cron uses a **ten-slot
 
 | Env var | Default | Meaning |
 |---------|---------|---------|
-| `WHATSAPP_SEND_DELAY_MS` | `2000` | Milliseconds to wait between sends within a slot |
-| `WHATSAPP_BATCH_LIMIT` | `100` | Maximum send attempts per cron invocation (slot) |
+| `WHATSAPP_SEND_DELAY_MS` | `500` | Milliseconds to wait between sends |
+| `WHATSAPP_BATCH_LIMIT` | `200` | Safety cap on send attempts per run |
 
-Long-running cron routes set `maxDuration` (requires **Vercel Pro** — Hobby caps at ~10s):
+Both are read by the two send loops that exist: the `send-reminders` cron slot and the admin **Kirim Link via WhatsApp** bulk send on the Pembayaran page. The batch limit is only a backstop — the real governor is a wall-clock budget in [lib/constants.ts](lib/constants.ts): `REMINDER_RUN_BUDGET_MS` (270 s) for the cron, `PAYMENT_LINK_RUN_BUDGET_MS` (240 s) for the bulk send, which is tighter because it also pays for `revalidatePath` and the RSC re-render after the loop returns. A send costs the delay plus ~2.2 s of Meta API and DB writes, so a run stops on the clock at ~90–100 sends and returns `truncated: true` with its counts intact. Without that budget the platform kills the loop mid-send and the result — counts and all — is lost.
 
-| Route | `maxDuration` | Why |
-|-------|---------------|-----|
-| `send-reminders` | 300 | 100 sends × 2s delay ≈ 3.3 min per slot |
+Long-running paths therefore set `maxDuration`, and the budget stays below it:
+
+| Path | `maxDuration` | Why |
+|------|---------------|-----|
+| `send-reminders` | 300 | ~100 sends per slot at ~2.7 s each, stopped at 270 s by the budget |
+| `/payments` segment | 300 | Carries the `sendPaymentLinksAction` bulk send (~90 sends, stopped at 240 s by the budget); set in [app/(dashboard)/payments/layout.tsx](app/\(dashboard\)/payments/layout.tsx) because the page is a client component |
 | `generate-invoices` | 120 | Invoice + token creation per billable student |
 | `reconcile-payments` | 120 | Sequential Midtrans status check per pending invoice |
 
-**Vercel Hobby** cannot run reminder or invoice-generation workloads at scale — functions time out after ~10s. Use **Vercel Pro** (for `maxDuration` up to 300s) or an **external cron** (e.g. GitHub Actions, cron-job.org) that calls the same GET endpoints with `Authorization: Bearer {CRON_SECRET}`.
+300 s is the **Vercel Hobby** ceiling; a deploy that asks for more is rejected. Raising throughput past a day's ten slots therefore means a paid plan (higher `maxDuration`) or an **external cron** (e.g. GitHub Actions, cron-job.org) calling the same GET endpoints with `Authorization: Bearer {CRON_SECRET}`. A persistently `truncated: true` run is the signal that the ceiling has been reached.
 
-Every slot runs Phase 1: for each invoice with a due (`scheduled_date <= today`) unsent reminder it sends only the **latest** due reminder and cancels the earlier due rows ("Digantikan pengingat terbaru"), so a reminder stranded in the past (mid-month enrollment, cuti rebill) is sent once and never duplicated or sent out of order; a same-day `FAILED` row is retried by the next slot. Slot 10 additionally sends the overdue/prior-month chase (Phase 2). Deduplication is automatic — already-SENT rows are skipped by subsequent slots.
+Every slot runs Phase 1: for each invoice with a due (`scheduled_date <= today`) unsent reminder it sends only the **latest** due reminder and cancels the earlier due rows ("Digantikan pengingat terbaru"), so a reminder stranded in the past (mid-month enrollment, cuti rebill) is sent once and never duplicated or sent out of order; a same-day `FAILED` row is retried by the next slot. Slots 3–10 additionally send the overdue/prior-month chase (Phase 2), which only spends the budget Phase 1 left. Deduplication is automatic — already-SENT rows are skipped by subsequent slots.
 
 ### Reports & insights (`/reports`)
 

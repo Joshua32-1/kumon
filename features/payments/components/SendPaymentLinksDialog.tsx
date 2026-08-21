@@ -27,6 +27,13 @@ interface SendPaymentLinksDialogProps {
   onSent?: () => void
 }
 
+/**
+ * Keep this dialog on the Pembayaran page. Its send is a Server Action, so it runs under
+ * the route segment it is invoked from, and only /payments raises `maxDuration` to 300
+ * (app/(dashboard)/payments/layout.tsx). Rendered elsewhere it would silently fall back
+ * to the platform default while `sendPaymentLinksForPeriod` still spends up to 240s —
+ * i.e. straight back to being killed mid-loop with the counts lost.
+ */
 export function SendPaymentLinksDialog({
   open,
   onOpenChange,
@@ -73,8 +80,22 @@ export function SendPaymentLinksDialog({
     }
 
     setIsSending(true)
-    const result = await sendPaymentLinksAction({ month, year })
-    setIsSending(false)
+    let result: Awaited<ReturnType<typeof sendPaymentLinksAction>>
+    try {
+      result = await sendPaymentLinksAction({ month, year })
+    } catch (err) {
+      // Covers a network drop, a platform timeout, and a genuine server throw alike — we
+      // cannot tell them apart here, and in two of the three some messages already went
+      // out. So the copy states only what is certain (it stopped early) and points at the
+      // page, which is the actual record of what was sent.
+      console.error("sendPaymentLinksAction failed", err)
+      toast.error(
+        "Pengiriman terhenti sebelum selesai. Muat ulang halaman untuk melihat tagihan yang sudah terkirim."
+      )
+      return
+    } finally {
+      setIsSending(false)
+    }
 
     if ("error" in result && result.error) {
       toast.error("Terjadi kesalahan saat mengirim link.")
@@ -82,8 +103,10 @@ export function SendPaymentLinksDialog({
     }
 
     const r = result.data
+    // Truncation is normally the time budget, not the batch limit — keep the copy true
+    // for both so the admin's next step is the same either way.
     const truncatedMsg = r?.truncated
-      ? " Batas batch tercapai — jalankan lagi untuk sisa tagihan."
+      ? " Belum semua terkirim — jalankan lagi untuk sisa tagihan."
       : ""
     const toastFn = r?.failed ? toast.warning : toast.success
     toastFn(
