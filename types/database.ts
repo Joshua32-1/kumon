@@ -334,6 +334,7 @@ export interface Database {
           reminder_number: number
           scheduled_date: string
           sent_at: string | null
+          first_failed_on: string | null
           status: ReminderStatus
           whatsapp_number: string
           message_preview: string | null
@@ -346,6 +347,7 @@ export interface Database {
           reminder_number: number
           scheduled_date: string
           sent_at?: string | null
+          first_failed_on?: string | null
           status?: ReminderStatus
           whatsapp_number: string
           message_preview?: string | null
@@ -358,6 +360,7 @@ export interface Database {
           reminder_number?: number
           scheduled_date?: string
           sent_at?: string | null
+          first_failed_on?: string | null
           status?: ReminderStatus
           whatsapp_number?: string
           message_preview?: string | null

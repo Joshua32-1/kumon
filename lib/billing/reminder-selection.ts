@@ -35,11 +35,26 @@ export function failedRetryWindowStart(today: string, windowDays: number): strin
  * The two sendable statuses are deliberately asymmetric:
  * - PENDING is unbounded below (`scheduled_date <= today`), so a reminder stranded in the
  *   past by a mid-month enrollment, manual generation or cuti rebill still self-heals.
- * - FAILED is bounded to `[failedRetryFrom, today]`. Without a lower bound a permanently
- *   broken number would be re-attempted on every slot forever; without a *window* — the
- *   old `scheduled_date = today` rule — a row that failed during an outage was dropped for
- *   good the moment the calendar day rolled over, and the parent silently never heard from
- *   us. The window is the middle ground: retried on the next reminder day, then abandoned.
+ * - FAILED is bounded. Without a lower bound a permanently broken number would be
+ *   re-attempted on every slot forever; without a *window* — the old `scheduled_date = today`
+ *   rule — a row that failed during an outage was dropped for good the moment the calendar
+ *   day rolled over, and the parent silently never heard from us. The window is the middle
+ *   ground: retried on the next reminder day, then abandoned.
+ *
+ * The window is measured from the LATER of `first_failed_on` (the day the send was actually
+ * attempted) and `scheduled_date`. Anchoring to the attempt is the point: the two dates agree
+ * only while the schedule and the cron cadence agree, and when they drift — a `reminder_days`
+ * config `vercel.json` does not follow — the first attempt lands days after `scheduled_date`,
+ * so a schedule-anchored window could expire before the next run and strand the row exactly
+ * as it did before the window existed.
+ *
+ * Taking the later of the two, rather than simply preferring `first_failed_on`, matters
+ * because a failure can also land *before* the row is due: the admin bulk push-ahead
+ * (`ignoreSchedule`) sends the earliest future reminder, so a failure there stamps a
+ * `first_failed_on` earlier than `scheduled_date`. Anchoring on that would expire the window
+ * before the row ever came due and the reminder would never be sent at all. Rows predating
+ * the column have no `first_failed_on` and fall back to `scheduled_date`, the behaviour they
+ * were written under.
  *
  * Widening FAILED does not multiply sends. An invoice is sent at most once per run, and
  * `selectReminderToSend` prefers the highest-numbered due row — so a rediscovered FAILED
@@ -50,13 +65,23 @@ export function failedRetryWindowStart(today: string, windowDays: number): strin
  * the SQL predicates in the service.
  */
 export function isPhase1DueReminder(
-  reminder: { status: string; scheduled_date: string },
+  reminder: {
+    status: string
+    scheduled_date: string
+    // Required, not optional: a caller that forgets to select the column would otherwise
+    // type-check while silently reverting to the scheduled_date anchor this exists to replace.
+    first_failed_on: string | null
+  },
   options: { today: string; failedRetryFrom: string }
 ): boolean {
   if (reminder.scheduled_date > options.today) return false
   if (reminder.status === "PENDING") return true
   if (reminder.status === "FAILED") {
-    return reminder.scheduled_date >= options.failedRetryFrom
+    const anchor =
+      reminder.first_failed_on && reminder.first_failed_on > reminder.scheduled_date
+        ? reminder.first_failed_on
+        : reminder.scheduled_date
+    return anchor >= options.failedRetryFrom
   }
   return false
 }

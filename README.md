@@ -203,8 +203,9 @@ Apply database migrations **before** (or at the same time as) deploying app code
 - **`0012`** clamps `reminder_days` into the invoice month's valid range inside `create_invoice_with_lines`, so a misconfigured day (e.g. 31) can't crash invoice generation on short months. `CREATE OR REPLACE` — safe to re-run. Verify: `SELECT position('GREATEST(1, LEAST' in pg_get_functiondef('create_invoice_with_lines(jsonb,jsonb,int[])'::regprocedure)) > 0;` → `t`.
 - **`0013`** adds the `message_events` table + `message_event_type`/`message_delivery_status` enums for WhatsApp delivery tracking (used by `/api/webhooks/meta`). Verify: `SELECT to_regclass('public.message_events');` → non-null.
 - **`0014`** adds the `create_invoices_with_lines` bulk RPC used by the automated generation path so it scales to hundreds of students in one round-trip. Verify: `SELECT proname FROM pg_proc WHERE proname = 'create_invoices_with_lines';` → 1 row.
+- **`0015`** adds `payment_reminders.first_failed_on` so the FAILED retry window measures from the first attempt instead of `scheduled_date` (a late first attempt could otherwise strand the reminder). Verify: `SELECT column_name FROM information_schema.columns WHERE table_name = 'payment_reminders' AND column_name = 'first_failed_on';` → 1 row.
 
-1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0014`.
+1. **Apply migrations** (Supabase SQL editor or `npx supabase db push`) through `0015`.
 2. **Verify enums** — in the Supabase SQL editor:
 
    ```sql
