@@ -11,7 +11,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["**/*.test.ts"],
-    exclude: ["node_modules", ".next"],
+    // Globs, not bare names: setting `exclude` replaces Vitest's defaults, and bare
+    // "node_modules" only matches the top-level dir — nested ones (git worktrees under
+    // .claude/) would otherwise have their bundled *.test.ts files collected.
+    exclude: ["**/node_modules/**", "**/.next/**", "**/.claude/**"],
     coverage: {
       // Report-only: prints a summary and writes HTML, but never fails CI.
       provider: "v8",

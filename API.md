@@ -94,6 +94,8 @@ Meta WhatsApp Cloud API webhook for message **delivery** callbacks (the send-API
 - **GET** — Meta subscription handshake: echoes `hub.challenge` (plain text, 200) when `hub.mode=subscribe` and `hub.verify_token === META_VERIFY_TOKEN`; otherwise 403.
 - **POST** — verifies `X-Hub-Signature-256` (HMAC-SHA256 of the raw body with `META_APP_SECRET`; 401 `WEBHOOK_INVALID` on mismatch), then advances each `message_events` row keyed by `wamid` to `DELIVERED`/`READ`/`FAILED`. Forward-progress only (out-of-order callbacks never downgrade); unknown `wamid` is ignored. Returns `{received: true, events, updated}`.
 
+  Statuses are applied **in bulk**: the payload is deduped to the highest-ranked status per `wamid`, looked up with chunked `in(wamid, …)` selects issued in parallel, then written as one `UPDATE` per distinct patch (`DELIVERY_BATCH_SIZE` = 100 ids per filter, since PostgREST puts the list in the URL). Cost is two round-trip phases regardless of batch size. This matters because a parent opening a chat marks hundreds of messages read at once: the earlier per-event loop did two sequential round trips *each*, so a bulk read exceeded Meta's few-second webhook timeout and the batch was abandoned — and Meta never resends a dropped status. `maxDuration = 60` is a safety ceiling, not the expected runtime.
+
 In the Meta dashboard, set the callback URL to `{NEXT_PUBLIC_APP_URL}/api/webhooks/meta`, the verify token to `META_VERIFY_TOKEN`, and subscribe to the `messages` field.
 
 ## Cron routes (`/api/cron/*`)
