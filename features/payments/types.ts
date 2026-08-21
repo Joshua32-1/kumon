@@ -66,6 +66,8 @@ export interface PaymentReminder {
   reminder_number: number
   scheduled_date: string
   sent_at: string | null
+  /** WIB day of the first failed send (0015). Anchors the Phase 1 retry window. */
+  first_failed_on: string | null
   status: ReminderStatus
   whatsapp_number: string
   message_preview: string | null

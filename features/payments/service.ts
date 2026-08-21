@@ -1414,16 +1414,24 @@ export const paymentService = {
     }
 
     // Phase 1: every invoice with a due, not-yet-sent reminder. Using `scheduled_date <= today`
-    // (not `=== today`) catches reminders whose scheduled day passed before the invoice existed
-    // (mid-month enrollment, manual generation, cuti rebill). FAILED rows get a bounded window
-    // instead: retried for REMINDER_FAILED_RETRY_WINDOW_DAYS, which reaches the next reminder day
-    // and no further. Scoping them to today alone used to strand them — a row that failed during
-    // an outage matched neither branch once the day rolled over, so the parent silently never got
-    // that reminder — while dropping the bound entirely would re-hit a permanently-failing number
-    // on every slot forever. Per invoice we send only the latest due reminder and supersede the
-    // rest, so each invoice still gets at most one send per run (a rediscovered FAILED row that a
-    // newer due reminder has overtaken is cancelled, not re-sent); the processedInvoiceIds set
-    // then keeps Phase 2 from touching the same invoice.
+    // (not `=== today`) catches reminders whose scheduled day passed before the invoice
+    // existed (mid-month enrollment, manual generation, cuti rebill). FAILED rows instead get
+    // a bounded window: retried for REMINDER_FAILED_RETRY_WINDOW_DAYS, and no further, so a
+    // permanently-failing number stops being re-hit.
+    //
+    // The window runs from the LATER of `first_failed_on` and `scheduled_date`, which the
+    // nested `or(...)` expresses directly — either date being inside the window admits the
+    // row, and a NULL `first_failed_on` (rows predating 0015) simply leaves `scheduled_date`
+    // to decide. Anchoring on the attempt is what stops a late first attempt from being
+    // stranded; taking the later of the two is what stops an EARLY one (the admin bulk
+    // push-ahead can send a future-dated row) from expiring the window before the row is
+    // even due. Mirrors isPhase1DueReminder, which re-checks every row this returns.
+    //
+    // Per invoice we send only the latest due reminder and supersede the rest, so each invoice
+    // still gets at most one send per run — a rediscovered FAILED row that a newer due reminder
+    // has overtaken is cancelled, not re-sent. The processedInvoiceIds set then keeps Phase 2
+    // from touching the same invoice inside this run, and alreadyContactedOn keeps it from
+    // doing so in a later slot.
     const failedRetryFrom = failedRetryWindowStart(
       today,
       REMINDER_FAILED_RETRY_WINDOW_DAYS
@@ -1438,11 +1446,14 @@ export const paymentService = {
     // the statuses sendPaymentReminderForInvoice will act on, so no real send is lost here.
     const { data: dueReminders, error } = await supabaseAdmin
       .from("payment_reminders")
-      .select("invoice_id, status, scheduled_date, invoices!inner(status)")
+      .select(
+        "invoice_id, status, scheduled_date, first_failed_on, invoices!inner(status)"
+      )
       .in("invoices.status", ["PENDING", "OVERDUE"])
       .or(
         `and(status.eq.PENDING,scheduled_date.lte.${today}),` +
-          `and(status.eq.FAILED,scheduled_date.gte.${failedRetryFrom},scheduled_date.lte.${today})`
+          `and(status.eq.FAILED,scheduled_date.lte.${today},` +
+          `or(first_failed_on.gte.${failedRetryFrom},scheduled_date.gte.${failedRetryFrom}))`
       )
 
     if (error) throw Errors.INTERNAL(error.message)
@@ -1758,6 +1769,23 @@ export const paymentService = {
   },
 
   async _markReminderFailed(reminderId: string, reason: string): Promise<void> {
+    // Stamp the FIRST failure only — `.is(null)` makes this a no-op once set. Phase 1 measures
+    // the retry window from this day, so refreshing it on every repeat failure would slide the
+    // window forward indefinitely and a permanently-failing number would never age out, which
+    // is the guard the window exists to provide. Written before the status flip so a failure
+    // here leaves the row sendable (PENDING, still discovered) rather than FAILED-and-unanchored.
+    const { error: stampError } = await supabaseAdmin
+      .from("payment_reminders")
+      .update({ first_failed_on: todayInCenterTimezone() })
+      .eq("id", reminderId)
+      .is("first_failed_on", null)
+    // Not fatal — the row still falls back to the scheduled_date anchor — but it silently
+    // reinstates the bug this column exists to fix, so it must not vanish. Matches
+    // _recordMessageEvent, which logs rather than throwing on a bookkeeping write.
+    if (stampError) {
+      console.error("Failed to stamp first_failed_on:", stampError.message)
+    }
+
     await supabaseAdmin
       .from("payment_reminders")
       .update({

@@ -42,6 +42,7 @@ export function makeReminder(partial: Partial<PaymentReminder> = {}): PaymentRem
     reminder_number: 1,
     scheduled_date: "2026-06-01",
     sent_at: null,
+    first_failed_on: null,
     status: "PENDING",
     whatsapp_number: "+6281234567890",
     message_preview: null,

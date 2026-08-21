@@ -70,12 +70,21 @@ export const REMINDER_CHASE_MAX_PRIOR_MONTHS = 3
  * on every slot forever — but the bound used to be "today only", which meant a row that
  * failed during an outage was never retried at all once the day rolled over.
  *
- * 11 days is derived from the cadence, not picked: `send-reminders` only runs on the
- * reminder days (1/11/21), and the widest gap between two of them is the 21st → the 1st
- * of a 31-day month = 11 days. So the window is exactly "your own day, plus the next
- * reminder day" — long enough that an outage on one reminder day is retried on the
- * following one, short enough that it can never reach a second. Changing the reminder
- * days (`system_config.reminder_days`) or the cron schedule means revisiting this.
+ * 11 days is derived from the cadence, not picked: `send-reminders` only runs on the days
+ * in `vercel.json` (1/11/21), and the widest gap between two of them is the 21st → the 1st
+ * of a 31-day month = 11 days. So the window is exactly "your own day, plus the next cron
+ * run" — long enough that an outage is retried on the following run, short enough that it
+ * can never reach a second.
+ *
+ * Measured from the later of `payment_reminders.first_failed_on` (0015, the day the send
+ * was actually attempted) and `scheduled_date` — not from `scheduled_date` alone. The two
+ * diverge whenever the schedule and the cron cadence drift: a `system_config.reminder_days`
+ * value the `vercel.json` schedule does not follow, or two cron runs missed back to back.
+ * Either way the first attempt lands days after
+ * `scheduled_date`, and a schedule-anchored window could expire before the next run — which
+ * stranded the reminder exactly as it did before the window existed (issue #26). Anchoring
+ * to the attempt makes 11 depend only on the cron schedule, so changing *that* still means
+ * revisiting this number.
  */
 export const REMINDER_FAILED_RETRY_WINDOW_DAYS = 11
 
